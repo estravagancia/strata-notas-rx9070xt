@@ -1,0 +1,197 @@
+From 644f890c93dd2a5c55d1de11332ea8375c0e6f69 Mon Sep 17 00:00:00 2001
+From: estravagancia <estravagancia@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 13:22:14 +0100
+Subject: [PATCH 1/2] hipBLASLt tuning lookup falls back to the family's
+ sibling table: a card reporting gfx1200 (an R9700 under
+ HSA_OVERRIDE_GFX_VERSION, an RX 9070 XT on wheels predating the
+ gfx1200/gfx1201 split) reaches the gfx1201 table of the same hipBLASLt
+ version, as the table header gate already allows; packaging stages and
+ validates it too
+
+---
+ src/prefill/gemm.cu                     | 31 ++++++++++++++++++++-
+ strata_control/hipblaslt_tuning.py      | 36 ++++++++++++++++++-------
+ tests/terminal/test_hipblaslt_tuning.py | 29 +++++++++++++++++---
+ 3 files changed, 83 insertions(+), 13 deletions(-)
+
+diff --git a/src/prefill/gemm.cu b/src/prefill/gemm.cu
+index a52af750..9b1bdac0 100644
+--- a/src/prefill/gemm.cu
++++ b/src/prefill/gemm.cu
+@@ -268,6 +268,24 @@ std::string own_tuning_dir() {
+ #endif
+ }
+ 
++// The architecture families whose hipBLASLt solution IDs are shared, the same families the table header gate accepts
++// (hipblaslt_tuning.hpp): RDNA4 gfx1200/gfx1201, RDNA3 gfx1100/gfx1101/gfx1102.
++struct SiblingArchs {
++    const char* names[2];
++    int count;
++};
++
++const SiblingArchs* arch_siblings(const std::string& arch) {
++    static const SiblingArchs rdna4[] = {{{"gfx1201"}, 1}, {{"gfx1200"}, 1}};
++    static const SiblingArchs rdna3[] = {{{"gfx1101", "gfx1102"}, 2}, {{"gfx1100", "gfx1102"}, 2}, {{"gfx1100", "gfx1101"}, 2}};
++    if (arch == "gfx1200") return &rdna4[0];
++    if (arch == "gfx1201") return &rdna4[1];
++    if (arch == "gfx1100") return &rdna3[0];
++    if (arch == "gfx1101") return &rdna3[1];
++    if (arch == "gfx1102") return &rdna3[2];
++    return nullptr;
++}
++
+ std::unique_ptr<HipLtState> create_hipblaslt_state(void* workspace, size_t workspace_bytes) {
+     std::string path_own;
+     const char* path = std::getenv("STRATA_HIPBLASLT_TUNING");
+@@ -306,7 +324,18 @@ std::unique_ptr<HipLtState> create_hipblaslt_state(void* workspace, size_t works
+         if (dir.empty()) return nullptr;
+         path_own = dir + arch + "-hipblaslt-" + std::to_string(version) + ".txt";
+         std::FILE* f = std::fopen(path_own.c_str(), "rb");
+-        if (f == nullptr) return nullptr;       // no table for this card and hipBLASLt version beside the engine: plain hipBLAS as before
++        if (f == nullptr) {
++            // A card can report its sibling name - an R9700 under HSA_OVERRIDE_GFX_VERSION reports gfx1200, an RX 9070 XT
++            // on wheels predating the gfx1200/gfx1201 split reports gfx1200 too - and the header gate of hipblaslt_tuning.hpp
++            // accepts the family's table for it: the file packaged under the sibling is that card's own calibration, and a
++            // solution id the running card lacks falls back per solution (getAlgosFromIndex / matmulIsAlgoSupported) below.
++            const SiblingArchs* sibs = arch_siblings(arch);
++            for (int s = 0; sibs != nullptr && s < sibs->count; ++s) {
++                path_own = dir + sibs->names[s] + "-hipblaslt-" + std::to_string(version) + ".txt";
++                if ((f = std::fopen(path_own.c_str(), "rb")) != nullptr) break;
++            }
++            if (f == nullptr) return nullptr;   // no table for this card's family and hipBLASLt version beside the engine: plain hipBLAS as before
++        }
+         std::fclose(f);
+         path = path_own.c_str();
+     }
+diff --git a/strata_control/hipblaslt_tuning.py b/strata_control/hipblaslt_tuning.py
+index a6f61313..256a52c4 100644
+--- a/strata_control/hipblaslt_tuning.py
++++ b/strata_control/hipblaslt_tuning.py
+@@ -41,6 +41,15 @@ OFF_WORDS = ("off", "0", "no", "false", "none", "disable", "disabled")
+ ON_WORDS = ("on", "1", "yes", "true", "force", "enable", "enabled")
+ _NAME = re.compile(r"^(gfx[0-9a-f]+)-hipblaslt-(\d+)\.txt$")
+ 
++#: Architectures that share hipBLASLt solution IDs and therefore tables, the same families the table header gate
++#: accepts (src/prefill/hipblaslt_tuning.hpp): RDNA4 gfx1200/gfx1201, RDNA3 gfx1100/gfx1101/gfx1102.  A card can
++#: report its sibling - an R9700 (gfx1201) under HSA_OVERRIDE_GFX_VERSION reports gfx1200, and an RX 9070 XT on the
++#: Linux 7.10.0a20251120 wheels, predating the gfx1200/gfx1201 split, reports gfx1200 although its proper name is
++#: gfx1201 - so a lookup by a reported name falls back to the sibling's table for the same hipBLASLt version.  A
++#: solution ID the running card does not support fails gemm.cu's per-solution gate and falls back to hipBLASEx.
++SIBLINGS = {"gfx1200": ("gfx1201",), "gfx1201": ("gfx1200",),
++            "gfx1100": ("gfx1101", "gfx1102"), "gfx1101": ("gfx1100", "gfx1102"), "gfx1102": ("gfx1100", "gfx1101")}
++
+ 
+ def table_name(arch: str, version: int) -> str:
+     return f"{arch}-hipblaslt-{version}.txt"
+@@ -97,11 +106,15 @@ def stage_tables(stage, archs, version: int | None, source) -> list[str]:
+         return copied
+     have = tables_in(source)
+     for arch in archs:
+-        path = have.get((arch, version))
+-        if path is None:
++        path, table_arch = have.get((arch, version)), arch
++        if path is None:                                   # a package built for a family member stages that family's table even
++            for table_arch in SIBLINGS.get(arch, ()):      # when this architecture has none named for itself (see SIBLINGS above):
++                if (path := have.get((table_arch, version))) is not None:  # a card of this package can report the sibling name, and
++                    break                                  # the engine finds the file under that name beside it
++        if path is None or path.name in copied:
+             continue
+-        if not header_ok(path, arch, version):
+-            raise SystemExit(f"{path}: the second line does not say '{HEADER} {arch} {version}'")
++        if not header_ok(path, table_arch, version):
++            raise SystemExit(f"{path}: the second line does not say '{HEADER} {table_arch} {version}'")
+         (stage / TABLE_DIR).mkdir(parents=True, exist_ok=True)
+         shutil.copy2(path, stage / TABLE_DIR / path.name)
+         copied.append(path.name)
+@@ -127,8 +140,8 @@ def check_stage(stage, archs) -> list[str]:
+             m = _NAME.match(path.name)
+             if not m:
+                 problems.append(f"tuning/{path.name} is not named <arch>-hipblaslt-<version>.txt")
+-            elif m.group(1) not in archs:
+-                problems.append(f"tuning/{path.name} is for {m.group(1)}, which this package has no code for")
++            elif m.group(1) not in archs and not any(m.group(1) in SIBLINGS.get(a, ()) for a in archs):
++                problems.append(f"tuning/{path.name} is for {m.group(1)}, which this package has no code for (nor is a family sibling)")
+             elif version is not None and int(m.group(2)) != version:
+                 problems.append(f"tuning/{path.name} is for hipBLASLt {m.group(2)}, this package carries {version}")
+             elif not header_ok(path, m.group(1), int(m.group(2))):
+@@ -203,16 +216,21 @@ def resolve(folder, archs_present, *, environ=None, cfg: dict | None = None) ->
+         return Decision(None, "hipBLASLt tuning table: not used, this PC's AMD GPU architecture could not be read; plain hipBLAS", "warn")
+     tables = tables_in(tuning)
+     for arch in dict.fromkeys(archs):
+-        path = tables.get((arch, version))
++        path, table_arch = tables.get((arch, version)), arch
++        if path is None:                                   # a card can report its sibling name (see SIBLINGS above): the family's
++            for table_arch in SIBLINGS.get(arch, ()):      # table for this hipBLASLt version is a lookup for it too, under the
++                if (path := tables.get((table_arch, version))) is not None:  # sibling's own name, header checked against that name
++                    break                                  # (the engine checks the card again, per solution, at the start)
+         if path is None:
+             continue
+-        if not header_ok(path, arch, version):
++        if not header_ok(path, table_arch, version):
+             return Decision(None, f"hipBLASLt tuning table: {path.name} is not used, its header does not match its name; plain hipBLAS", "warn")
+         if mode(environ, cfg) == "auto" and not (AUTO_USES_TABLE or arch in AUTO_ARCHS):
+             return Decision(None, f"hipBLASLt tuning table: {path.name} is in this package and not used by default (faster prompts, but answers can differ "
+                                   f"in the last digits); {SWITCH}=on uses it")
+         return Decision(path, f"hipBLASLt tuning table: {path.name} (faster prompts; {SWITCH}=off turns it off)")
+-    other = sorted({v for (a, v) in tables if a in archs})
++    family = {a for arch in dict.fromkeys(archs) for a in (arch, *SIBLINGS.get(arch, ()))}
++    other = sorted({v for (a, v) in tables if a in family})
+     if other:
+         return Decision(None, f"hipBLASLt tuning table: not used, this engine carries hipBLASLt {version} and the tables for {', '.join(dict.fromkeys(archs))} "
+                               f"are for {', '.join(str(v) for v in other)} (solution ids are valid for one version only); plain hipBLAS", "warn")
+diff --git a/tests/terminal/test_hipblaslt_tuning.py b/tests/terminal/test_hipblaslt_tuning.py
+index 999ef2b2..ae2f0b9e 100644
+--- a/tests/terminal/test_hipblaslt_tuning.py
++++ b/tests/terminal/test_hipblaslt_tuning.py
+@@ -88,15 +88,28 @@ class Decision(TempDir):
+         self.assertIn("100500", d.message)
+         self.assertIn("plain hipBLAS", d.message)
+ 
+-    def test_a_card_without_a_table_in_the_package_gets_plain_hipblas_and_one_line(self):
+-        pkg = fake_package(self.root)
++    def test_a_card_without_a_table_or_sibling_table_in_the_package_gets_plain_hipblas_and_one_line(self):
++        pkg = fake_package(self.root, tables=(("gfx1151", 100500),))   # gfx1151 is its own family: nothing here reaches a gfx1200 card
+         d = ht.resolve(pkg, ["gfx1200"], environ=ON)
+         self.assertIsNone(d.path)
+         self.assertIn("none for gfx1200", d.message)
+ 
+     def test_the_card_that_has_a_table_is_found_among_several(self):
+         pkg = fake_package(self.root, tables=(("gfx1100", 100500), ("gfx1151", 100500)))
+-        self.assertEqual(ht.resolve(pkg, ["gfx1101", "gfx1151"], environ=ON).path.name, "gfx1151-hipblaslt-100500.txt")
++        self.assertEqual(ht.resolve(pkg, ["gfx1201", "gfx1151"], environ=ON).path.name, "gfx1151-hipblaslt-100500.txt")  # gfx1201 has neither its own nor a sibling table here
++
++    def test_a_card_finds_the_family_siblings_table_for_the_same_hipblaslt_version(self):
++        # an RX 9070 XT on the Linux 7.10.0a20251120 wheels reports gfx1200 (predating the gfx1200/gfx1201 split) and an
++        # R9700 under HSA_OVERRIDE_GFX_VERSION reports gfx1200 too: each reaches the other family member's table of the
++        # same hipBLASLt version; the version gate itself stays exact.
++        pkg = fake_package(self.root / "rdna4", version=100200, tables=(("gfx1200", 100200),))
++        self.assertEqual(ht.resolve(pkg, ["gfx1201"], environ=ON).path.name, "gfx1200-hipblaslt-100200.txt")
++        pkg = fake_package(self.root / "rdna3", tables=(("gfx1101", 100500),))
++        self.assertEqual(ht.resolve(pkg, ["gfx1102"], environ=ON).path.name, "gfx1101-hipblaslt-100500.txt")  # RDNA3 siblings too
++        pkg = fake_package(self.root / "version", version=100200, tables=(("gfx1201", 100500),))
++        d = ht.resolve(pkg, ["gfx1200"], environ=ON)
++        self.assertIsNone(d.path)                     # a 100500 table is not a lookup for 100200, not even for a sibling
++        self.assertIn("100500", d.message)
+ 
+     def test_a_package_that_does_not_say_its_hipblaslt_is_not_guessed_at(self):
+         pkg = fake_package(self.root, version=None)
+@@ -241,6 +254,16 @@ class PackageContents(TempDir):
+             for arch in wanted:                           # the file the engine start will pick is there and its own header agrees
+                 self.assertTrue(ht.header_ok(stage / "tuning" / ht.table_name(arch, version), arch, version), (platform, arch))
+ 
++    def test_stage_tables_stages_the_family_siblings_table_for_an_architecture_without_one(self):
++        src = self.root / "tables"
++        fake_table(src, "gfx1200", 100200)
++        stage = self.root / "stage"
++        copied = ht.stage_tables(stage, ("gfx1201",), 100200, src)      # a gfx1201-only package stages the gfx1200 family table for it
++        self.assertEqual(copied, ["gfx1200-hipblaslt-100200.txt"])      # under the family's own name: the engine finds it as a sibling
++        (stage / "BUILD.json").write_text(json.dumps({"version": "0.2.1", "backend": "hip", "hipblaslt_version": 100200}), encoding="utf-8")
++        self.assertEqual(ht.check_stage(stage, ("gfx1201",)), [])       # check_stage accepts it as a sibling of the package architecture
++        self.assertTrue(any("no code for" in p for p in ht.check_stage(stage, ("gfx1151",))))  # gfx1151 is another family: a problem
++
+     def test_the_missing_report_names_the_architectures_without_a_table(self):
+         left = ht.missing_report(("gfx1100", "gfx1101", "gfx1102"), 100200, TABLES)
+         self.assertEqual(sorted(left), ["gfx1101", "gfx1102"])
+-- 
+2.53.0
+

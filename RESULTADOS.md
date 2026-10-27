@@ -1,0 +1,61 @@
+# Resultados y cómo medimos
+
+## El método (para que nuestros números se puedan comparar y repetir)
+
+- Herramienta: `tools/strata_bench.py` del propio Strata (3 pasadas por cada prueba;
+  el informe guarda `results.json` con el esquema "schema 1").
+- **Consola fría**: producción parada, OpenCode/agentes parados, servidor exclusivo de
+  la corrida con su propio log. Script: `scripts/run-bench.sh`.
+- 2 corridas por sesión: **run1 = calentamiento (se descarta), run2 = la válida**, tras
+  auditar el `server.log` (cero prompts ajenos ≥20k tokens) y el `meta.txt` (engine,
+  config con sha256, flags reales).
+- El "chat" de las tablas es la **media de los 9 requests de conversación** del bench;
+  la línea resumen del script muestra la **mediana**. No mezclar las dos.
+- Nada de comparar con la serie anterior al 23-10 (aquella se midió "en caliente" y no
+  es comparable en absoluto).
+
+## Serie principal (motor frío, IQ3_XXS, contexto 98.304)
+
+| Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+|---|---|---|---|---|---|
+| `-anclaje98` (23-10) | 0.1.48 | 74,6 | 1.957,7 | 2.409,4 | referencia del protocolo |
+| `-iqpc0` (24-10) | 0.1.48.1 | **78,1** | 1.924,1 | 2.375,1 | control A/A del día del popcount |
+| `-iqpc1` (24-10) | 0.1.48.1 | 76,9 | 1.926,2 | 2.384,3 | + `STRATA_IQ_POPCOUNT=1` → descartado |
+| `-iq3-0150` (25-10) | **0.1.50** | 77,8 | **1.949,3** | **2.385,5** | motor oficial → **neutral, adoptado** |
+| `-iqgather` (25-10) | 0.1.50 | 76,7 | 1.949,9 | 2.385,5 | + `STRATA_IQ_GATHER=1` → descartado |
+
+Lecturas honestas:
+
+- **No mezcles la columna "chat" entre días**: `-anclaje98` publica la mediana del
+  script y `-iqpc0`/`-iq3-0150` publican la media de los 9 requests; restarlas tal cual
+  da falsos +4 %. La comparación cuidada de ese cruce de días dio chat **+0,3 %**
+  (y −1,7 % / −1,4 % en prefill), arrastrando además un cambio de flags de caché
+  posterior al `-anclaje98`. Ese ancla solo sirve dentro de su propio día.
+- Los dos A/B limpios (mismo día, misma config, una sola variable) son
+  `-iqpc0` vs `-iqpc1` (24-10) y `-iq3-0150` vs `-iqgather` (25-10).
+- 0.1.48.1 → 0.1.50 (comparando los controles de cada día, con la reserva de "días
+  distintos"): chat −0,3 %, 4K +1,3 %, 16K +0,4 % → **neutral**, y por eso el motor
+  oficial se quedó.
+- Las muestras completas de `-iqpc0`, `-iq3-0150` e `-iqgather` están en
+  [benches/muestras/](benches/muestras/) (cada una con su `results.json`).
+
+## La ganancia de las tablas de ajuste (el 21-10, motor 0.1.47)
+
+Comparativa publicada en el parche C2 (medida antes del protocolo en frío; los dos runs
+usaron contexto distinto, 100.000 vs 105.000, por eso el "chat" sale mezclado y solo los
+números de prefill son limpios):
+
+| Métrica | sin tabla | con tabla (67 filas) |
+|---|---|---|
+| prefill 4K tok/s | 1.965,9 | **1.989,5 (+1,2 %)** |
+| prefill 16K tok/s | 2.398,4 | **2.445,9 (+2,0 %)** |
+| primer token (4K) | 2,065 s | 2,042 s |
+| chat tok/s | 71,4 | 70,6 (mezclado con el contexto, achacar con cuidado) |
+
+## Producción actual (27-10, IQ3_S, contexto 131.072)
+
+Con la config final (motor 0.1.50, `--spec-min-p 0.5`, reserva 1.536 MiB,
+`STRATA_SELECT_WMMA=1`, subset español): un request real de 16.646 tokens de entrada
+produjo **2.181 tok/s de prefill y 78,3 tok/s de salida** (medida puntual del propio
+servidor, no del bench; el A/B formal de la config IQ3_S contra la serie IQ3_XXS está
+pendiente — **no comparar** estas cifras con la tabla de arriba: son otro modelo).

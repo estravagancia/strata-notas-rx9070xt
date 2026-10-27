@@ -1,0 +1,81 @@
+# Lo que NO funcionó (y no lo repitas)
+
+Todo esto se midió en esta caja con el protocolo en frío. Un negativo documentado vale
+tanto como un positivo: son ideas que cualquiera (incluido yo mismo dentro de seis
+meses) podría volver a intentar.
+
+## `STRATA_IQ_POPCOUNT=1` — popcount Zen 5 en los expertos IQ3 → **−1,5 % chat**
+
+El atajo: sustituir una tabla de signos por `_mm256_popcnt_epi32` (instrucción que la
+CPU tiene). Micro-medida pura del kernel: **15-30 % más rápido**. Servidor completo
+(A/B mismo día, `-iqpc0` vs `-iqpc1`): chat **−1,5 %**, prefill plano.
+Moraleja: con el cuello en el PCIe (55 GB/s reales), acelerar el decode CPU de los
+cuantizados no mueve el total — y el overhead de la bandera sí.
+
+## `STRATA_IQ_GATHER=1` — gathers AVX-512 → **−1,4 % chat**
+
+Arriba (upstream) lo midieron en Zen 4: 3-5 % más LENTO. Hipótesis local: Zen 5 (9800X3D)
+tiene gather por hardware y se invertirá. Medido (A/B mismo día `-iq3-0150` vs
+`-iqgather`): **−1,5 % / −1,4 %** en dos corridas. No se invierte. Segundo flag de CPU
+que se estrella contra el mismo muro.
+
+## Subir el contexto (131k o 163k) → chat −4 % para +1 % de prefill
+
+Corridas del 23-10 contra la ancla del día (98.304):
+
+| Contexto | 4K | 16K | chat |
+|---|---|---|---|
+| 131.072 | +1,0 % | +0,8 % | **−4,2 %** |
+| 163.840 | −1,5 % | +0,3 % | **−3,9 %** |
+
+Ninguno superó nuestro umbral de adopción (subida de prefill >1,5 % sin perder >2 % de
+chat). Se mantenía 98.304… hasta que el 26-10 el usuario subió a 131.072 por necesidad
+de contexto real aceptando el coste. Si solo necesitas contexto largo, 131.072 es el
+paso menos caro.
+
+## `--kv k8v4` (cuantización de la memoria KV) → desastre en AMD
+
+4K **−23,7 %**, 16K **−31,7 %**. Upstream lo reporta casi neutro en CUDA (RTX 3090:
+prompt −2..5 %); la rotación Hadamard de la clave V es mucho más lenta en HIP. Dato a
+tener en cuenta en cualquier RDNA 3/4: lo que está medido en NVIDIA no vale aquí.
+
+## Wheels ROCm nuevos (7.14) + motor experimental → −22 % a 4K
+
+El experimento "Plan B": motor de laboratorio 0.1.47.14 con wheels **7.14.0a20260612**
+y su tabla 100400, corriendo en paralelo (puerto 8082) contra la baseline del momento.
+Prefill 4K **−22 %** (1.547 vs 1.990), 16K −1,3 %. Se quedó la combinación vieja:
+wheels 7.10.0a20251120 + su tabla 100200. Buscar lo nuevo no pagó aquí.
+
+## Caché de expertos "por capa" (`--expert-cache-per-layer`) → ruido
+
++0,8/+0,1/+1,2 % (4K/16K/chat), dentro de la varianza entre corridas. No adoptado.
+
+## `--spec-min-p 0.75` → neutro
+
+Chat +4,7 % pero 4K −2,2 % y 16K −1,0 %. (Ojo: ese +4,7 % es del día sin el subset
+español; la historia cambió cuando el subset entró — ver [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md).)
+
+## `--pcie-frac 0.6` (ajuste de la ventana de carga por PCIe) → nada
+
+Modo determinista, mismo día, única variable: −0,2/−0,1/−0,3 %. El auto-valor de la
+sonda (0.55) ya era correcto; tocarlo no sirve.
+
+## Visión (imágenes) en la GPU → 1 GiB de VRAM que se paga en chat
+
+El lector de imágenes en GPU (`strata-vision-hip`) es rápido (1,06 s por imagen
+768×768) pero ocupa ~1 GiB de VRAM estable que se resta de la cache de expertos. Con
+16 GiB justos, mejor lector en CPU (el valor por defecto de Strata para tarjetas de
+menos de ~23 GB). Coincide con lo que recomienda upstream.
+
+## Borradores "dflash2" → ni lo intentamos
+
+Upstream ya lo midió en familias RDNA 4: *"gfx1201 (R9700): slower on every prompt"*.
+Confiamos en esa medida; no la replicamos (lo decimos para que no cuenten esto como
+medida nuestra).
+
+## Y un aviso sobre el propio proceso
+
+Dos notas de rendimiento que dábamos por ciertas resultaron ser falsas en su día (una
+porque citaba documentación de una versión vieja que la documentación nueva contradice,
+otra porque usaba cifras ajenas que no aplicaban a esta ruta). Regla que aprendimos:
+**nada de decisiones con cifras que no hayas medido tú en tu caja**, y medir siempre en frío.

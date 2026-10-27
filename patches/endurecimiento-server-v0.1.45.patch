@@ -1,0 +1,1143 @@
+diff --git a/SECURITY.md b/SECURITY.md
+index 476dab97..6455339f 100644
+--- a/SECURITY.md
++++ b/SECURITY.md
+@@ -38,6 +38,24 @@ this PC only. The details and every setting are in [docs/DETAILS.md](docs/DETAIL
+ - **CORS** is off unless `"cors_origins"` lists origins, and then only for `/v1/*`.
+ - **MCP tools** are opt-in: only the servers you put in the run config, only for requests from Strata's own page
+   that ask for them. They run with your user's rights, and the model decides when to call them.
++- **Pictures.** A picture read from this computer is at most 32 MiB, the same bound as one read from a URL
++  (`STRATA_MAX_IMAGE_FILE_MIB` changes it): a bigger file is a 400 and its bytes are never read. Network paths
++  (`\\host\share`, `//host/share`, `file://host/...`) are refused, and `"image_dir"` in the config's `vision` section
++  (or `STRATA_IMAGE_DIR`) limits local pictures to that directory, with links and `..` resolved before the check.
++  An `http(s)` URL is checked before anything connects: one that points at this PC itself (`127.0.0.1`, `::1`,
++  `localhost`) or at a link-local address (`169.254.169.254`, `fe80::`) is refused, and so is every redirect
++  destination (at most 3 hops). A LAN address is allowed on purpose. `"image_url_allow_internal": true` in the run
++  config (or `STRATA_IMAGE_URL_ALLOW_INTERNAL=1`) allows the PC itself too. A URL that fails reaches the client as one
++  sentence, `the image URL could not be read`; the reason goes to the server's window (`STRATA_VERBOSE_ERRORS=1` puts
++  it in the sentence).
++  A picture whose header declares more pixels than Pillow's own limit is refused too, decided from the header before
++  the bytes reach the decoder (that refusal used to be swallowed, and a few hundred bytes of JPEG could ask for
++  hundreds of gigapixels of memory).
++- **The panel's page** (`/` and `/api-monitor`, the only HTML the server sends) carries a `Content-Security-Policy`
++  (`default-src 'self'`, nothing may be loaded from another host, `frame-ancestors 'none'` so no other page can frame
++  it), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. The panel's own
++  inline script and handlers make `'unsafe-inline'` necessary for now, so the policy mainly stops resources from
++  elsewhere and framing. `/v1/*`, the CSS, the JS and the fonts are answered as before.
+ - **The request monitor** (`/api-monitor`, which keeps the last prompts and answers in memory) is off unless
+   `"api_monitor": true` is set. Apart from it, the server keeps in its process memory the text and tokens of its
+   last few prompts, whatever `"api_monitor"` says, to encode the next turn faster; no endpoint shows them, and they
+diff --git a/serve/server.py b/serve/server.py
+index 2e805773..50f8080e 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -276,6 +276,12 @@ def engine_frozen(base: tuple[float, int], now: tuple[float, int]) -> bool:
+ VISION_READY_S = _timeout_env("STRATA_VISION_READY_S", 300.0)
+ VISION_ENCODE_S = _timeout_env("STRATA_VISION_ENCODE_S", 300.0)
+ ENGINE_READY_S = _timeout_env("STRATA_ENGINE_READY_S", 900.0)
++# The request line and the headers are read with a timeout.  Without one a client that opens a connection and says
++# nothing holds a server thread for as long as it likes (measured on 0.1.45: 12 connections with a half-sent GET were
++# still open 6 s later and nothing in the server noticed).  It covers the headers only: the body and the answer keep the
++# blocking reads they have always had, so a slow upload or a long stream is never cut.  STRATA_REQUEST_HEADERS_S
++# overrides it (0 = wait for ever, as before).
++REQUEST_HEADERS_S = _timeout_env("STRATA_REQUEST_HEADERS_S", 15.0)
+ 
+ 
+ # ------------------------------------------------------------------------------------------------ engines
+@@ -2238,6 +2244,87 @@ class StrataEngine:
+ IMAGE_URL_MAX = 32 << 20        # an image URL is read up to this (the web app attaches pictures of up to 20 MB)
+ 
+ 
++def flag_env(name: str) -> bool:
++    """A switch in the environment: "1" (or "true", "yes", case-insensitive) is on, anything else - including unset -
++    is off."""
++    return os.environ.get(name, "").strip().lower() not in ("", "0", "false", "no")
++
++
++def verbose_errors() -> bool:
++    """Whether the sentences a client gets for a failed image carry the detail (an exception's text, a path, a port).
++    Off: a client cannot use the server as a probe, and the detail goes to the server's window.  STRATA_VERBOSE_ERRORS=1
++    turns it on while debugging."""
++    return flag_env("STRATA_VERBOSE_ERRORS")
++
++
++def image_url_allow_internal() -> bool:
++    """Whether an image URL may point at this PC itself (127.0.0.1, ::1) or at a link-local address.  Off: a picture's
++    URL is not a reason to make the server fetch http://127.0.0.1:<port>/ or http://169.254.169.254/ for whoever sent
++    it.  STRATA_IMAGE_URL_ALLOW_INTERNAL=1 (or "image_url_allow_internal": true in the run config, which sets that
++    variable) turns it on for a setup that serves its pictures from a local app."""
++    return flag_env("STRATA_IMAGE_URL_ALLOW_INTERNAL")
++
++
++class UrlRefused(Exception):
++    """An image URL that must not be read, with the reason: the window gets it, the client gets one sentence."""
++
++
++def image_url_refusal(url: str, allow_internal: bool | None = None) -> str | None:
++    """Why `url` must not be read, or None when it may be.  Refused: the loopback and the link-local addresses
++    (127.0.0.1, ::1, 169.254.169.254, fe80::), multicast and the unspecified address.  A LAN address (10/8,
++    172.16/12, 192.168/16) is allowed: this is a home server, and a picture on another machine of one's own network is
++    a normal thing to send.  Every address the host resolves to is checked, so a name whose DNS says 127.0.0.1 is
++    refused like the address itself."""
++    if allow_internal is None:
++        allow_internal = image_url_allow_internal()
++    parts = urlsplit(url)
++    if not parts.hostname:
++        return "the URL names no host"
++    port = parts.port or (443 if parts.scheme == "https" else 80)
++    try:
++        infos = socket.getaddrinfo(parts.hostname, port, proto=socket.IPPROTO_TCP)
++    except (socket.gaierror, UnicodeError, ValueError) as e:
++        return f"its host could not be resolved ({e})"
++    import ipaddress
++    for info in infos:                                  # str/bytes of the address, per family
++        try:
++            ip = ipaddress.ip_address(info[4][0])
++        except ValueError:
++            continue
++        if ip.is_multicast or ip.is_unspecified:
++            return f"{parts.hostname} is {ip}, which is not a machine"
++        if not allow_internal and (ip.is_loopback or ip.is_link_local):
++            return (f"{parts.hostname} is {ip} (this PC itself, or a link-local address): "
++                    f"STRATA_IMAGE_URL_ALLOW_INTERNAL=1 allows it")
++    return None
++
++
++class ImageRedirects(urllib.request.HTTPRedirectHandler):
++    """At most 3 hops, and every hop's destination is checked like the first one.  Without this a host that answers 302
++    with `Location: http://127.0.0.1:8081/status` took the server to its own endpoints (the audit's third finding),
++    since only the original URL had been looked at."""
++
++    max_redirections = 3
++
++    def redirect_request(self, req, fp, code, msg, headers, newurl):
++        refusal = image_url_refusal(newurl)
++        if refusal:
++            raise UrlRefused(f"{newurl}: {refusal}")
++        return super().redirect_request(req, fp, code, msg, headers, newurl)
++
++
++def image_file_limit() -> int:
++    """The most a local image file may hold, in bytes: 32 MiB, the same bound as an image URL (the web app attaches
++    pictures of up to 20 MB).  STRATA_MAX_IMAGE_FILE_MIB changes it (0 or an unreadable value: the default).  Checked
++    with os.path.getsize before the file is opened, so a 28 GB shard named .png is a 400 and never enters the server's
++    memory."""
++    try:
++        mib = int(os.environ.get("STRATA_MAX_IMAGE_FILE_MIB", "0"))
++    except ValueError:
++        mib = 0
++    return mib << 20 if mib > 0 else IMAGE_URL_MAX
++
++
+ def network_path(path: str) -> bool:
+     r"""A path to another computer: \\host\share or //host/share (either slash), \\?\UNC\host\..., \\.\UNC\host\...
+     or the NT form \??\UNC\host\...  Windows connects to that host at the first look at the path (os.path.isfile is
+@@ -2307,6 +2394,12 @@ class Vision:
+             args += ["--max-tokens", str(cfg["max_tokens"])]
+         if cfg.get("min_tokens"):                       # #767: mtmd's image_min_tokens (a hand-edited key)
+             args += ["--min-tokens", str(cfg["min_tokens"])]
++        where = cfg.get("image_dir") or os.environ.get("STRATA_IMAGE_DIR") or ""
++        # opt-in: with "image_dir" in the vision section (or STRATA_IMAGE_DIR) a local picture has to be inside that
++        # directory; unset, any file the server can read is still read, bounded by image_file_limit().
++        self.image_dir = os.path.realpath(os.path.expanduser(str(where))) if where else None
++        if self.image_dir and not os.path.isdir(self.image_dir):
++            raise RuntimeError(f'"image_dir" is not a directory: {self.image_dir}')
+         self.dir = self.work_dir()
+         self.spawn = (args, log, env)                   # to start it again after an unload
+         self.proc = None
+@@ -2387,7 +2480,10 @@ class Vision:
+         self._start()
+ 
+     @staticmethod
+-    def load(source: str) -> bytes:
++    def load(source: str, image_dir: str | None = None) -> bytes:
++        """What encode() reads: a data: URL, an http(s) URL, or a path on this computer.  A local file is bounded by
++        image_file_limit() before it is opened, and when the config sets "image_dir" it has to be inside that directory.
++        Anything not read is a ValueError (a 400 that says why)."""
+         if source.startswith("data:"):
+             try:
+                 return base64.b64decode(source.split(",", 1)[1])
+@@ -2403,25 +2499,55 @@ class Vision:
+             raise ValueError("an image file must be on this computer: network paths (\\\\host\\share, //host/share, "
+                              "file://host/...) are not read")
+         if path and os.path.isfile(path):
++            try:
++                size = os.path.getsize(path)
++            except OSError as e:
++                raise ValueError(f"the image could not be read from {path} ({e})") from None
++            limit = image_file_limit()
++            if size > limit:
++                raise ValueError(f"the image file is over {limit >> 20} MiB ({size >> 20} MiB): raise "
++                                 f"STRATA_MAX_IMAGE_FILE_MIB only for a file this server should read")
++            if image_dir and not Vision.inside_image_dir(path, image_dir):
++                raise ValueError(f"the image file {path} is outside \"image_dir\" ({image_dir}): the server only "
++                                 f"reads pictures from that directory")
+             try:
+                 return Path(path).read_bytes()
+             except OSError as e:
+                 raise ValueError(f"the image could not be read from {path} ({e})") from None
+         raise ValueError("an image must be a data: URL, an http(s) URL or a local file path")
+ 
++    @staticmethod
++    def inside_image_dir(path: str, root: str) -> bool:
++        """Whether `path`, with every link and ".." resolved, is inside `root` (both are real paths)."""
++        try:
++            return os.path.commonpath([os.path.realpath(path), root]) == root
++        except ValueError:                                       # different drives on Windows
++            return False
++
+     @staticmethod
+     def download(url: str) -> bytes:
+-        """An image URL's bytes, at most IMAGE_URL_MAX of them: the whole response was read, so a huge or endless one
+-        filled the memory.  One that cannot be read is a ValueError (a 400 that says so), not a dropped connection."""
++        """An image URL's bytes, at most IMAGE_URL_MAX of them.  The host is checked first (image_url_refusal) and the
++        destination of every redirect after it.  A URL that cannot be read, or must not be, is a ValueError (a 400): the
++        reason goes to the server's window, and the client gets one sentence unless STRATA_VERBOSE_ERRORS=1."""
+         too_big = f"the image URL's file is over {IMAGE_URL_MAX >> 20} MiB"
++        neutral = "the image URL could not be read"
++        refusal = image_url_refusal(url)
++        if refusal:
++            print(f"[strata] refused the image URL {url!r}: {refusal}", flush=True)
++            raise ValueError(refusal if verbose_errors() else neutral)
+         try:
+-            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "strata"}), timeout=60) as r:
++            opener = urllib.request.build_opener(ImageRedirects())
++            with opener.open(urllib.request.Request(url, headers={"User-Agent": "strata"}), timeout=60) as r:
+                 size = r.headers.get("Content-Length") or ""
+                 if size.isdigit() and int(size) > IMAGE_URL_MAX:
+                     raise ValueError(too_big)
+                 data = r.read(IMAGE_URL_MAX + 1)
++        except UrlRefused as e:
++            print(f"[strata] refused the image URL {url!r}: {e}", flush=True)
++            raise ValueError(str(e) if verbose_errors() else neutral) from None
+         except (OSError, HTTPException) as e:
+-            raise ValueError(f"the image URL could not be read: {e}") from None
++            print(f"[strata] the image URL {url!r} could not be read: {e}", flush=True)
++            raise ValueError(f"the image URL could not be read: {e}" if verbose_errors() else neutral) from None
+         if len(data) > IMAGE_URL_MAX:
+             raise ValueError(too_big)
+         return data
+@@ -2429,13 +2555,23 @@ class Vision:
+     @staticmethod
+     def _exif_rotated(data: bytes) -> bool:
+         """A JPEG whose EXIF Orientation says it is stored turned (phones do this for portrait photos): the decoder
+-        (stb_image) ignores the tag.  False without Pillow, or when the tag is missing, 1 or unreadable (#1229)."""
++        (stb_image) ignores the tag.  False without Pillow, or when the tag is missing, 1 or unreadable (#1229).
++
++        A JPEG Pillow refuses as a decompression bomb is not "an image as it was sent": that is a ValueError here, so
++        it becomes a 400, instead of `False` - which sent the bytes to the passthrough decoder, and stb_image has no
++        bound of its own, so a few KiB of JPEG could ask for gigapixels of memory (the audit's finding)."""
+         try:
+             import io
+             from PIL import Image
++        except ImportError:
++            return False
++        try:
+             with Image.open(io.BytesIO(data)) as im:
+                 return im.getexif().get(0x0112, 1) not in (None, 0, 1)
+-        except Exception:  # noqa: BLE001 - any failure leaves the image as it was sent
++        except Image.DecompressionBombError as e:
++            raise ValueError(f"the image is too large to read ({e}); raise Pillow's Image.MAX_IMAGE_PIXELS only if "
++                             f"this server has the memory for it") from None
++        except Exception:  # noqa: BLE001 - any other failure leaves the image as it was sent
+             return False
+ 
+     @staticmethod
+@@ -2484,7 +2620,7 @@ class Vision:
+     def encode(self, source: str | bytes, keep=()) -> tuple[Path, int]:
+         """-> (embeddings file, number of image tokens).  `source`: what load() reads, or the image's bytes.
+         `keep`: files the caller still needs (never evicted by this call)."""
+-        data = self.normalize(source if isinstance(source, bytes) else self.load(source))
++        data = self.normalize(source if isinstance(source, bytes) else self.load(source, getattr(self, "image_dir", None)))
+         key = hashlib.sha256(data).hexdigest()[:32]
+         with self.lock:
+             if key in self.cache:
+@@ -5113,6 +5249,21 @@ class BadBody(Exception):
+         self.status = status
+ 
+ 
++# The web app's own page (index.html and monitor.html): what it may load - all of it comes from this server - and what
++# a page of another origin may not do with it (frame it: clickjacking; or read which page a request came from).  The
++# panel has one inline <script> and its onclick/oninput handlers, so 'unsafe-inline' stays until they move to app.js.
++# Only the HTML gets these: /v1/*, the CSS, the JS and the fonts are answered byte-identically to before.
++HTML_SECURITY_HEADERS = (
++    ("Content-Security-Policy",
++     "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
++     "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; "
++     "form-action 'self'"),
++    ("X-Content-Type-Options", "nosniff"),
++    ("X-Frame-Options", "DENY"),
++    ("Referrer-Policy", "no-referrer"),
++)
++
++
+ def make_handler(svc: Service):
+     class Handler(BaseHTTPRequestHandler):
+         protocol_version = "HTTP/1.0"                       # SSE ends by closing the connection
+@@ -5121,13 +5272,24 @@ def make_handler(svc: Service):
+         watch_done = None                                   # #430 #431: stops this request's disconnect watcher
+         body_read = False                                   # whether a handler took this request's body
+         DRAIN_SECONDS = 5                                   # the longest an unread body is read and dropped
++        headers_prev = None                                 # the socket's own timeout, before the headers' one
+ 
+         def log_message(self, fmt, *args):
+             pass
+ 
+         def handle_one_request(self):
+             self.answer_started = False
+-            super().handle_one_request()
++            # REQUEST_HEADERS_S covers reading the request line and the headers: a connection that opens and says
++            # nothing would otherwise hold this thread for as long as the client likes.  parse_request puts the socket
++            # back the moment the headers are read, so a body arriving slowly and a long answer are read exactly as
++            # they were before (a 256 MiB body is read in 1 MiB pieces, and no pause between them is a timeout).
++            self.headers_prev = self.connection.gettimeout()
++            if REQUEST_HEADERS_S is not None:
++                self.connection.settimeout(REQUEST_HEADERS_S)
++            try:
++                super().handle_one_request()
++            finally:
++                self.connection.settimeout(self.headers_prev)
+             self._drain_body()
+ 
+         def send_response(self, code, message=None):
+@@ -5236,21 +5398,27 @@ def make_handler(svc: Service):
+         def parse_request(self):
+             """Without an API key, every request (any method) first passes the Host check: DNS rebinding protection
+             (host_allowed).  With a key a rebinding page cannot authenticate, so the check is skipped: tunnels and
+-            proxies that pass their own name on keep working."""
+-            if not super().parse_request():
++            proxies that pass their own name on keep working.
++            The headers' read timeout (REQUEST_HEADERS_S, put in place by handle_one_request) ends here: what comes
++            after - a body arriving in slow pieces, a long streamed answer - is read with the blocking socket it
++            always had, so nothing about a slow or large request changes."""
++            try:
++                if not super().parse_request():
++                    return False
++                host = self.headers.get("Host")
++                if svc.api_key or host_allowed(host, svc.host_names, "*" in svc.allowed_hosts):
++                    return True
++                print(f"[strata] refused a request for Host {host!r} from {self.client_address[0]}: not a name this server "
++                      f"answers to (add it to \"allowed_hosts\" in the config or STRATA_ALLOWED_HOSTS, or set an API key)",
++                      flush=True)
++                self._json(403, {"error": {"type": "forbidden", "message":
++                                 f"Host {host!r} is not allowed (DNS rebinding protection). Reaching Strata under this "
++                                 f"name on purpose? Add it to \"allowed_hosts\" in the config (strata-<model>.json) or to "
++                                 f"the STRATA_ALLOWED_HOSTS environment variable, or set an API key (\"api_key\"), which "
++                                 f"turns this check off"}})
+                 return False
+-            host = self.headers.get("Host")
+-            if svc.api_key or host_allowed(host, svc.host_names, "*" in svc.allowed_hosts):
+-                return True
+-            print(f"[strata] refused a request for Host {host!r} from {self.client_address[0]}: not a name this server "
+-                  f"answers to (add it to \"allowed_hosts\" in the config or STRATA_ALLOWED_HOSTS, or set an API key)",
+-                  flush=True)
+-            self._json(403, {"error": {"type": "forbidden", "message":
+-                             f"Host {host!r} is not allowed (DNS rebinding protection). Reaching Strata under this "
+-                             f"name on purpose? Add it to \"allowed_hosts\" in the config (strata-<model>.json) or to "
+-                             f"the STRATA_ALLOWED_HOSTS environment variable, or set an API key (\"api_key\"), which "
+-                             f"turns this check off"}})
+-            return False
++            finally:
++                self.connection.settimeout(self.headers_prev)
+ 
+         def _foreign_page(self) -> bool:
+             """Without an API key, a /v1 POST from a browser page of another site (any site can POST text/plain
+@@ -5455,6 +5623,8 @@ def make_handler(svc: Service):
+                 self.send_response(200)
+                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                 self.send_header("Content-Length", str(len(body)))
++                for name, value in HTML_SECURITY_HEADERS:
++                    self.send_header(name, value)
+                 self.end_headers()
+                 self.wfile.write(body)
+             elif path in ("/health", "/api/health"):
+@@ -7011,6 +7181,12 @@ def main() -> int:
+         print("[strata] Host check off: any name reaches this server (allowed_hosts \"*\")" if "*" in svc.allowed_hosts
+               else f"[strata] also answers to the host names {', '.join(svc.allowed_hosts)} (allowed_hosts)", flush=True)
+     svc.api_monitor = a.api_monitor or cfg.get("api_monitor") is True
++    if cfg.get("image_url_allow_internal") is True:
++        # a picture URL may point at this PC itself (image_url_refusal reads the variable; a run config key, like
++        # allowed_hosts, cannot be read from a static method)
++        os.environ["STRATA_IMAGE_URL_ALLOW_INTERNAL"] = "1"
++        print("[strata] image URLs may point at this PC itself and at link-local addresses "
++              "(image_url_allow_internal)", flush=True)
+     if svc.api_monitor:
+         print("[strata] API request monitor on (/api-monitor): the last 100 requests' prompts and answers are kept in "
+               "memory" + ("" if svc.api_key else "; anyone who can reach this server can read them (no API key)"),
+diff --git a/serve/test_request_hardening.py b/serve/test_request_hardening.py
+index 37eb849c..74711f88 100644
+--- a/serve/test_request_hardening.py
++++ b/serve/test_request_hardening.py
+@@ -1,11 +1,16 @@
+ """0.1.41 server hardening: a JSON body of the wrong shape is a 400 (not a dropped connection), an oversized body is a
+ 413 before it is read, a bad Content-Length is a 400, and a sampling field of the wrong type is a 400 that names it.
++Plus the headers' read timeout: a connection that opens and says nothing is closed (STRATA_REQUEST_HEADERS_S, 0 = wait
++for ever, as before); bodies and answers are not capped.
+ 
+     python -m unittest serve.test_request_hardening -v
+ """
+ import http.client
+ import json
+ import os
++import select
++import socket
++import time
+ import unittest
+ from pathlib import Path
+ from unittest import mock
+@@ -172,5 +177,76 @@ class Hardening(unittest.TestCase):
+         self.assertEqual(code, 200, out)
+ 
+ 
++class HeaderTimeout(unittest.TestCase):
++    """A connection that opens and says nothing is closed by the headers' read timeout; a body that arrives slowly is
++    not.  The 12 half-sent connections that stayed open in the audit are the first test, here at 8 sockets."""
++
++    @classmethod
++    def setUpClass(cls):
++        tok = ByteTokenizer()
++        cls.svc = Service(MockEngine(tok, "hello there", max_context=4096), tok,
++                          ChatTemplate(ROOT / "serve/chat_template.jinja"))
++        cls.httpd = serve(cls.svc, port=0)
++        cls.port = cls.httpd.server_address[1]
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.httpd.shutdown()
++        cls.httpd.server_close()
++
++    def silent(self) -> float:
++        """Seconds until the server closes a socket that sent a request line that never ends, with the headers'
++        timeout patched.  -1 when it stayed open for the whole 3 s of the wait."""
++        s = socket.create_connection(("127.0.0.1", self.port), timeout=10)
++        try:
++            s.sendall(b"GET /health HT")                      # half a request line, then nothing
++            s.settimeout(3)
++            t0 = time.monotonic()
++            try:
++                if s.recv(1) != b"":
++                    raise AssertionError("the server answered a connection that sent no request")
++            except socket.timeout:
++                return -1.0
++            return time.monotonic() - t0
++        finally:
++            s.close()
++
++    def test_connections_that_say_nothing_are_closed(self):
++        with mock.patch("serve.server.REQUEST_HEADERS_S", 1.0):
++            for _ in range(8):                                # as many as the audit opened at once
++                closed = self.silent()
++                with self.subTest():
++                    self.assertGreaterEqual(closed, 0.9, "closed before its timeout, or not closed at all")
++                    self.assertLess(closed, 2.5, "the 1 s timeout did not close it")
++
++    def test_waiting_for_ever_is_what_0_means(self):
++        with mock.patch("serve.server.REQUEST_HEADERS_S", None):
++            self.assertEqual(self.silent(), -1.0, "0 must keep the old behaviour: the connection stays open")
++
++    def test_a_body_that_arrives_slowly_is_not_cut(self):
++        with mock.patch("serve.server.REQUEST_HEADERS_S", 1.0):
++            body = json.dumps({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 8}).encode()
++            s = socket.create_connection(("127.0.0.1", self.port), timeout=20)
++            try:
++                s.sendall(b"POST /v1/chat/completions HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: "
++                          b"application/json\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n")
++                half = len(body) // 2
++                s.sendall(body[:half])
++                time.sleep(2.5)                               # three times the headers' timeout, mid-body
++                readable, _, _ = select.select([s], [], [], 0.3)
++                self.assertEqual(readable, [], "the server closed a request whose body was still arriving")
++                s.sendall(body[half:])
++                data = b""
++                while True:
++                    piece = s.recv(65536)
++                    if not piece:
++                        break
++                    data += piece
++            finally:
++                s.close()
++            self.assertIn(b" 200 OK", data)
++            self.assertIn(b'"completion_tokens": 8', data)     # the whole answer came through, as any other request's
++
++
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/serve/test_security.py b/serve/test_security.py
+index 0e8f260b..f1d15e68 100644
+--- a/serve/test_security.py
++++ b/serve/test_security.py
+@@ -134,6 +134,45 @@ class OverHttp(unittest.TestCase):
+     def chat_body(self):
+         return {"model": "m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 64}
+ 
++    # --- Hardening headers on the panel's HTML (step 5)
++    def headers_of(self, path):
++        """(status, headers) of a GET, as a browser sees them (lower-case names)."""
++        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
++        try:
++            with contextlib.redirect_stdout(io.StringIO()):
++                c.request("GET", path)
++                r = c.getresponse()
++                r.read()
++            return r.status, {k.lower(): v for k, v in r.getheaders()}
++        finally:
++            c.close()
++
++    def test_the_panel_html_carries_the_hardening_headers(self):
++        self.start(api_monitor=True)
++        for path in ("/", "/api-monitor"):
++            with self.subTest(path=path):
++                code, h = self.headers_of(path)
++                self.assertEqual(code, 200)
++                csp = h["content-security-policy"]
++                self.assertIn("default-src 'self'", csp)
++                self.assertIn("frame-ancestors 'none'", csp)                # clickjacking
++                self.assertIn("img-src 'self' data: blob:", csp)            # the panel attaches and shows data: URLs
++                self.assertIn("connect-src 'self'", csp)
++                self.assertIn("base-uri 'self'", csp)
++                self.assertEqual(h["x-content-type-options"], "nosniff")
++                self.assertEqual(h["x-frame-options"], "DENY")
++                self.assertEqual(h["referrer-policy"], "no-referrer")
++
++    def test_the_rest_of_the_server_is_left_alone(self):
++        """Only the HTML: /v1/*, the CSS, the JS and the fonts keep the bytes and headers they had (DETAILS.md says so)."""
++        self.start()
++        for path in ("/v1/models", "/web/app.js", "/web/app.css", "/health"):
++            with self.subTest(path=path):
++                code, h = self.headers_of(path)
++                self.assertEqual(code, 200)
++                self.assertNotIn("content-security-policy", h)
++                self.assertNotIn("x-frame-options", h)
++
+     # --- Host
+     def test_rebinding_name_is_refused_everywhere(self):
+         self.start()
+diff --git a/serve/test_server.py b/serve/test_server.py
+index e68b44ac..c6fdcc67 100644
+--- a/serve/test_server.py
++++ b/serve/test_server.py
+@@ -5133,7 +5133,10 @@ class ImageSources(unittest.TestCase):
+             with mock.patch.object(Path, "read_bytes", side_effect=PermissionError("denied")),                     self.assertRaisesRegex(ValueError, "could not be read from"):
+                 Vision.load(str(f))
+ 
++    @mock.patch.dict(os.environ, {"STRATA_IMAGE_URL_ALLOW_INTERNAL": "1", "STRATA_VERBOSE_ERRORS": "1"})
+     def test_a_url_is_read_up_to_the_cap(self):
++        """A server of its own on 127.0.0.1, so the test allows internal URLs and the detailed sentences (as the code
++        did before 0.1.46); serve/test_image_ssrf.py covers the refusal itself."""
+         import http.server
+         import serve.server as server
+ 
+diff --git a/setup.py b/setup.py
+index 3dd2ca51..63122e92 100644
+--- a/setup.py
++++ b/setup.py
+@@ -48,6 +48,7 @@ import os
+ import platform
+ import re
+ import shutil
++import stat
+ import struct
+ import subprocess
+ import sys
+@@ -56,7 +57,7 @@ import time
+ import urllib.error
+ import urllib.request
+ import zipfile
+-from pathlib import Path
++from pathlib import Path, PurePosixPath
+ 
+ ROOT = Path(__file__).resolve().parent
+ WIN = os.name == "nt"
+@@ -166,6 +167,28 @@ def ms_meta(repo: str, path: str):
+ HF = hf("ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF")
+ LLAMA_CPP_COMMIT = "3cf03257f219afbe7334045ff7c6a06ac68c627d"
+ LLAMA_CPP_ZIP = f"https://github.com/ggml-org/llama.cpp/archive/{LLAMA_CPP_COMMIT}.zip"
++# A generated source archive has no published digest: a release asset's comes from the API (engine_digest), but GitHub
++# builds this zip on the fly, so the SHA-256 and the size below were measured here for the pinned commit (measured on
++# 2026-10-19: 39564399 bytes, cbe23c59...).  GitHub does not promise that a generated archive keeps the same bytes for
++# ever; a mismatch stops setup with both numbers in the message, and STRATA_SKIP_SHA256=1 goes on (the switch the engine
++# asset already honors).  The commit alone says which tree; this says which bytes.
++LLAMA_CPP_ZIP_SHA256 = {
++    LLAMA_CPP_COMMIT: (39564399, "cbe23c594282ead2937abb3f008e51fcec4609d9256652fff42c7cc1c21ea47b"),
++}
++# zipfile takes no filter="data" (that is tarfile's, used for the Vulkan SDK): an archive whose member names are
++# absolute or step out of the target with ".." is refused here, before a byte is written.  The zips unpacked by setup
++# are GitHub's source archive and the release assets; a zip can also carry a symbolic link, which zipfile writes as one,
++# so those are counted and said.
++def zip_members_safe(z: zipfile.ZipFile, members=None) -> None:
++    names = z.namelist() if members is None else members
++    for name in names:
++        p = PurePosixPath(name.replace("\\", "/"))
++        if p.is_absolute() or (p.parts and p.parts[0].endswith(":")) or ".." in p.parts:
++            raise zipfile.BadZipFile(f"the archive has a member outside the target: {name!r}")
++    links = [i.filename for i in z.infolist() if stat.S_ISLNK(i.external_attr >> 16)]
++    if links:
++        warn(f"the archive carries {len(links)} symbolic link(s) (first: {links[0]}): zipfile writes them as links")
++
+ 
+ # The ready-made engine: <PREBUILT_URL><asset>, a zip with strata(.exe), strata-vision(.exe) and BUILD.json, built
+ # by tools/make_release.py.  Set this to the GitHub release download folder when publishing, e.g.
+@@ -1791,12 +1814,14 @@ def verify_sha256(s: Path, size: int, sha: str) -> None:
+     """A shard's size and SHA-256 against the pinned values (the Unsloth file); the result is kept in its finish mark,
+     so the ~5 minutes of hashing 111 GB happen once.  A wrong file is deleted, so the next run downloads it again."""
+     m = s.with_name(s.name + ".done")
+-    if m.exists() and f"sha256 {sha}" in m.read_text(encoding="utf-8", errors="replace"):
+-        return
++    if s.exists() and m.exists() and f"sha256 {sha}" in m.read_text(encoding="utf-8", errors="replace"):
++        return                                             # a mark without the file (a zip removed after unpacking)
++                                                           # must not pass for a fresh download of it
+     have = s.stat().st_size if s.exists() else -1
+     if have != size:
+         fail(f"{s.name} is {have:,} bytes, not {size:,}", "delete it and run setup again (the download restarts)")
+-    say(f"  checking {s.name} (SHA-256, {size / 1e9:.1f} GB) ...")
++    say(f"  checking {s.name} (SHA-256, "
++        f"{f'{size / 1e9:.1f} GB' if size >= 1e9 else f'{size / 1e6:.0f} MB'}) ...")
+     h = hashlib.sha256()
+     with open(s, "rb") as f:
+         while True:
+@@ -1991,6 +2016,19 @@ def check_shards(shards):
+                  f"delete {s.name} and its .done mark and run setup again")
+ 
+ 
++def verify_llama_archive(z: Path) -> None:
++    """The pinned source archive's bytes, not only its commit: LLAMA_CPP_ZIP_SHA256 keeps what was measured here for
++    that commit (the `verify_sha256` result stays in the zip's mark, so a second run does not hash it again).
++    STRATA_SKIP_SHA256=1 skips the check, saying so."""
++    meta = LLAMA_CPP_ZIP_SHA256.get(LLAMA_CPP_COMMIT)
++    if meta is None:
++        warn(f"no SHA-256 is recorded for the llama.cpp {LLAMA_CPP_COMMIT[:7]} archive: its bytes are not checked")
++    elif os.environ.get("STRATA_SKIP_SHA256") == "1":
++        warn("STRATA_SKIP_SHA256=1: NOT checking the llama.cpp source archive against its SHA-256")
++    else:
++        verify_sha256(z, meta[0], meta[1])
++
++
+ def get_llama_cpp():
+     """llama.cpp at the pinned commit (ggml for the build, gguf-py for the tools, mtmd for images), as a zip: no git."""
+     llama = ROOT / "third_party" / "llama.cpp"
+@@ -2002,9 +2040,12 @@ def get_llama_cpp():
+     shutil.rmtree(tmp, ignore_errors=True)
+     try:
+         with zipfile.ZipFile(z) as f:
++            verify_llama_archive(z)                    # the bytes, before the first member is written
+             # llama.cpp's own web UI (tools/ui) is not used, and its deep paths passed Windows' 260-character limit in a
+             # folder like Downloads\Strata-main\Strata-main (#206)
+-            f.extractall(tmp, [m for m in f.namelist() if "/tools/ui/" not in m])
++            members = [m for m in f.namelist() if "/tools/ui/" not in m]
++            zip_members_safe(f, members)
++            f.extractall(tmp, members)
+     except zipfile.BadZipFile:
+         # #1797: do not let the .done mark make every later run reuse a damaged source archive.
+         try:
+@@ -2929,6 +2970,7 @@ def get_prebuilt_hip(url_base, gpu, updating=False) -> Path | None:
+     tmp = eng / "_unpack"
+     shutil.rmtree(tmp, ignore_errors=True)
+     with zipfile.ZipFile(z) as f:
++        zip_members_safe(f)
+         f.extractall(tmp)
+     try:
+         meta = json.loads((tmp / "BUILD.json").read_text(encoding="utf-8"))
+@@ -2981,6 +3023,44 @@ def rocm_dev_missing(sysroot: Path) -> list:
+     return [name for name, paths in need.items() if not any(p.is_file() for p in paths)]
+ 
+ 
++def rocm_installs() -> dict:
++    """What the ROCm wheels in .venv really installed: {name: [version, sha256 of pip's RECORD]} for the `rocm` wheel
++    and the `rocm-sdk-*` wheels it pulls. AMD's TheRock index publishes no hash for its wheels — its <index>/rocm/
++    page links plain file names, with no `#sha256=` fragment on any of the versions it lists (checked against
++    https://rocm.nightlies.amd.com/v2/gfx120X-all/rocm/ on 2026-10-19: 0 fragments) — and pip does not keep the wheel
++    after installing it, so pip's own per-file record of each installed distribution is the only fingerprint the
++    install leaves behind. It is not the wheel's SHA-256: it is what ended up in .venv, and it changes when another
++    wheel, or a hand-run pip, installed different bytes."""
++    digs = {}
++    for sp in {Path(p) for p in sys.path if p.endswith("site-packages")}:
++        for info in sorted(sp.glob("rocm*.dist-info")):
++            try:
++                raw = (info / "RECORD").read_bytes()
++            except OSError:
++                continue
++            name, _, version = info.name[: -len(".dist-info")].partition("-")
++            digs[name] = [version, hashlib.sha256(raw).hexdigest()]
++    return digs
++
++
++def rocm_stamp(version: str, index: str, note: str | None = None) -> dict:
++    """The contents of .venv/.strata-rocm.json (rocm_root): the wheel version used, its index, what the wheels really
++    installed (`rocm_installs`) and the warning that made a fallback version necessary. rocm_pick falls back to "the
++    newest of the same 7.x line" when a nightly is pruned (#1103, #1267); before this the stamp held only
++    `{"version", "index"}` and nothing recorded that the installed wheel was a fallback rather than the pin."""
++    out = {"version": version, "index": index, "installs": rocm_installs()}
++    if note:
++        out["note"] = note
++    return out
++
++
++def rocm_drift(have: dict, now: dict) -> list:
++    """Distribution names whose installed bytes are not the ones the stamp recorded (`have` is the stamp, `now` is
++    `rocm_installs()`): changed, or installed now but not recorded, or recorded and gone from .venv now."""
++    recorded = have.get("installs") or {}
++    return sorted(n for n in set(recorded) | set(now) if recorded.get(n) != now.get(n))
++
++
+ def rocm_root(archs):
+     """ROCm for compiling and running the HIP engine for `archs` (one arch or a list: the cards of a layer split):
+     (root, library folders).  A system ROCm 7 with hipcc, hipBLAS and the HIP development files (#446), else AMD's
+@@ -3005,7 +3085,7 @@ def rocm_root(archs):
+     index = indexes[0]
+     stamp = Path(sys.prefix) / ".strata-rocm.json"
+     have = json.loads(stamp.read_text(encoding="utf-8")) if stamp.exists() else {}
+-    wheel = None
++    wheel, note = None, None
+     if have.get("index") == index and have.get("version") and not ROCM_VERSION_OVERRIDE \
+             and (Path(sys.executable).parent / "rocm-sdk").exists() and have["version"] == ROCM_FAMILY_PINS.get(rocm_family(index), ROCM_VERSION_DEFAULT):
+         wheel = have["version"]                         # the family's pin is installed: no lookup
+@@ -3019,7 +3099,20 @@ def rocm_root(archs):
+         if have.get("version") == wheel:               # the same version for another GPU family: its own libraries
+             run(pip + ["--force-reinstall", "--no-deps", f"rocm=={wheel}"])
+         run(pip + [f"rocm[libraries,devel]=={wheel}"])
+-        stamp.write_text(json.dumps({"version": wheel, "index": index}))
++        stamp.write_text(json.dumps(rocm_stamp(wheel, index, note)))
++    else:                                               # the wheel asked for is the one recorded: check the installed bytes
++        now = rocm_installs()
++        if not have.get("installs"):
++            # a stamp written before this record existed (or that recorded nothing): add what is installed now,
++            # without reinstalling anything
++            stamp.write_text(json.dumps(rocm_stamp(wheel, index, note)))
++        else:
++            changed = rocm_drift(have, now)
++            if changed:
++                warn(f"the ROCm in .venv is not what setup installed ({', '.join(changed)}: their installed bytes are "
++                     f"not the ones {stamp.name} records): run setup again to get the pinned wheels back")
++            elif note and have.get("note") != note:
++                stamp.write_text(json.dumps(rocm_stamp(wheel, index, note)))   # record which fallback this install is on
+     sdk = Path(sys.executable).parent / "rocm-sdk"
+     root = Path(out([str(sdk), "path", "--root"]).strip())
+     if not (root / "llvm" / "bin" / "clang++").exists():
+@@ -3641,6 +3734,7 @@ def get_prebuilt(url_base, gpu, vision, updating=False, toolkit=13) -> Path | No
+     shutil.rmtree(tmp, ignore_errors=True)
+     try:
+         with zipfile.ZipFile(z) as f:
++            zip_members_safe(f)
+             f.extractall(tmp)
+     except zipfile.BadZipFile:                         # not a zip, or a damaged one: a kept .done mark would make
+         drop_archive(z)                                # every later run fail on it instead of downloading it again
+diff --git a/tools/strata_mcp.py b/tools/strata_mcp.py
+index 72895893..56ea75f2 100644
+--- a/tools/strata_mcp.py
++++ b/tools/strata_mcp.py
+@@ -44,6 +44,7 @@ VERSION = "0.1.0"
+ WIN = os.name == "nt"
+ DEFAULT_ROOT = Path(__file__).resolve().parent.parent
+ DEFAULT_PORT = 8080
++MCP_HOST = os.environ.get("STRATA_MCP_HOST", "127.0.0.1")   # host al que el MCP hace sus HTTP calls
+ STATE_DIR = ".strata-mcp"                             # in the Strata folder (git-ignored)
+ 
+ # What setup.py offers, used only when setup.py cannot be imported (the numbers are setup's MODELS / FAMILIES /
+@@ -318,7 +319,7 @@ def http_json(url: str, method="GET", body=None, api_key=None, timeout=3.0):
+         return status, None
+ 
+ 
+-def port_free(port: int, host="127.0.0.1") -> bool:
++def port_free(port: int, host=MCP_HOST) -> bool:
+     import socket
+     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+     try:
+@@ -774,7 +775,7 @@ class Strata:
+     def probe(self, port: int, deep=True) -> dict | None:
+         """What answers on 127.0.0.1:port: a Strata server's facts, {"other": True} for something else, None for
+         nothing."""
+-        base = f"http://127.0.0.1:{port}"
++        base = f"http://{MCP_HOST}:{port}"
+         st, health = http_json(base + "/health", timeout=self.health_timeout)
+         if st == 0:
+             return None
+@@ -1407,7 +1408,7 @@ class Tools:
+                                 + "\n".join(tail))
+             info = s.probe(port)
+             if info and not info.get("other"):
+-                return {"summary": f"Strata is running: {info.get('model')} on http://127.0.0.1:{port}/v1 "
++                return {"summary": f"Strata is running: {info.get('model')} on http://{MCP_HOST}:{port}/v1 "
+                                    "(OpenAI and Anthropic APIs; chat page at http://127.0.0.1:" + str(port) + "/)",
+                         "server": {**info, "pid": p.pid}}
+             if time.time() >= end:
+@@ -1428,11 +1429,11 @@ class Tools:
+             if tracked:
+                 port = tracked["port"]
+                 key = s.api_key_for(port)
+-                st, body = http_json(f"http://127.0.0.1:{port}/status", api_key=key, timeout=3)
++                st, body = http_json(f"http://{MCP_HOST}:{port}/status", api_key=key, timeout=3)
+                 if st == 200 and isinstance(body, dict) and body.get("busy") and not force:
+                     raise ToolError("a request is running on Strata right now; wait for it, or call strata_stop "
+                                     "with force=true to stop anyway")
+-                st, body = http_json(f"http://127.0.0.1:{port}/unload", "POST", api_key=key, timeout=120)
++                st, body = http_json(f"http://{MCP_HOST}:{port}/unload", "POST", api_key=key, timeout=120)
+                 unloaded = (body or {}).get("status") if isinstance(body, dict) else None
+                 if st == 409 and not force:
+                     raise ToolError("Strata is busy (a request is running or queued); call again with force=true "
+@@ -1455,7 +1456,7 @@ class Tools:
+                 info = s.probe(p, deep=False)
+                 if info and not info.get("other"):
+                     key = s.api_key_for(p)
+-                    st, body = http_json(f"http://127.0.0.1:{p}/unload", "POST", api_key=key, timeout=120)
++                    st, body = http_json(f"http://{MCP_HOST}:{p}/unload", "POST", api_key=key, timeout=120)
+                     r = body.get("status") if isinstance(body, dict) else None
+                     if st == 409:
+                         raise ToolError("Strata is busy (a request is running); try again when it is done")
+@@ -1505,14 +1506,14 @@ class Tools:
+             raise ToolError("Strata is not running: start it first (strata_start)")
+         p = target["port"]
+         key = s.api_key_for(p)
+-        st, stat = http_json(f"http://127.0.0.1:{p}/status", api_key=key, timeout=3)
++        st, stat = http_json(f"http://{MCP_HOST}:{p}/status", api_key=key, timeout=3)
+         if st == 200 and isinstance(stat, dict) and (stat.get("busy") or stat.get("queued")):
+             raise ToolError("Strata is busy with a request; run the speed test when it is idle")
+         body = {"model": target.get("model") or "strata", "max_tokens": max_tokens, "temperature": 0,
+                 "reasoning_effort": "none", "stream": False,
+                 "messages": [{"role": "user", "content": BENCH_PROMPT}]}
+         t0 = time.time()
+-        st, r = http_json(f"http://127.0.0.1:{p}/v1/chat/completions", "POST", body, api_key=key, timeout=600)
++        st, r = http_json(f"http://{MCP_HOST}:{p}/v1/chat/completions", "POST", body, api_key=key, timeout=600)
+         wall = time.time() - t0
+         if st != 200 or not isinstance(r, dict):
+             msg = (r or {}).get("error", {}).get("message") if isinstance(r, dict) else None
+@@ -1551,7 +1552,7 @@ class Tools:
+         if key_needed is None:
+             key_needed = any(s.describe_config(c)["api_key_set"] for c in s.configs())
+         key = "<your api_key from strata-<model>.json>" if key_needed else "none"
+-        base = f"http://127.0.0.1:{port}"
++        base = f"http://{MCP_HOST}:{port}"
+         return {
+             "summary": (f"Strata {'runs' if target else 'will run'} at {base}: OpenAI base URL {base}/v1, Anthropic "
+                         f"base URL {base}" + (" (an API key is required)" if key_needed else " (any API key works)")),
+diff --git a/tools/test_setup_llama_archive.py b/tools/test_setup_llama_archive.py
+index 9a7bda52..b5d6cfa5 100644
+--- a/tools/test_setup_llama_archive.py
++++ b/tools/test_setup_llama_archive.py
+@@ -7,7 +7,9 @@ Only tiny local zip files and the standard library are used; no GPU, model or ne
+ from __future__ import annotations
+ 
+ import contextlib
++import hashlib
+ import io
++import os
+ import sys
+ import tempfile
+ import unittest
+@@ -37,16 +39,33 @@ class LlamaSourceArchive(unittest.TestCase):
+         self.archive.parent.mkdir()
+         self.unrelated = self.archive.parent / "user-notes.txt"
+         self.unrelated.write_text("keep this", encoding="utf-8")
++        # the recorded digest is patched with the fixture's own, so these tests are about the flow (the real numbers for
++        # the pinned commit are in LLAMA_CPP_ZIP_SHA256 and are the subject of test_setup_llama_archive_digest below)
++        self.digest = {}
++        self.sync(self.source.read_bytes())
+         stack = contextlib.ExitStack()
+         self.addCleanup(stack.close)
+         stack.enter_context(mock.patch.object(setup, "ROOT", self.root))
++        stack.enter_context(mock.patch.object(setup, "LLAMA_CPP_ZIP_SHA256", self.digest))
+         # a plain path: download() copies it (file:// plus a Windows drive letter is not one)
+         stack.enter_context(mock.patch.object(setup, "LLAMA_CPP_ZIP", str(self.source)))
+         stack.enter_context(mock.patch.object(setup.urllib.request, "urlopen",
+                                              side_effect=AssertionError("test must not use the network")))
+-        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
++        self.out = io.StringIO()
++        stack.enter_context(contextlib.redirect_stdout(self.out))
++
++    def sync(self, data):
++        """What LLAMA_CPP_ZIP_SHA256 says for the pinned commit: the bytes at hand (size and SHA-256)."""
++        self.digest[setup.LLAMA_CPP_COMMIT] = (len(data), hashlib.sha256(data).hexdigest())
++        return data
++
++    def serve(self, data):
++        """What the "download" brings: the origin's bytes, and the digest recorded for them."""
++        self.source.write_bytes(data)
++        return self.sync(data)
+ 
+     def cached(self, data):
++        """A zip already in the cache (the digest in the table is a separate thing: it is what the origin serves)."""
+         self.archive.write_bytes(data)
+         setup.mark(self.archive)
+ 
+@@ -79,7 +98,7 @@ class LlamaSourceArchive(unittest.TestCase):
+         self.assert_installed(setup.get_llama_cpp())
+ 
+     def test_a_bad_new_download_is_also_removed(self):
+-        self.source.write_bytes(b"not a zip")
++        self.serve(b"not a zip")
+         with self.assertRaises(zipfile.BadZipFile):
+             setup.get_llama_cpp()
+         self.assert_cache_removed()
+@@ -93,7 +112,10 @@ class LlamaSourceArchive(unittest.TestCase):
+ 
+     def test_crc_failure_during_extraction_is_removed_and_the_next_call_recovers(self):
+         # Keep the ZIP directory intact; the second member fails its CRC after the first was extracted.
+-        self.cached(self.source.read_bytes().replace(b"gguf fixture", b"BAD! fixture", 1))
++        good = self.source.read_bytes()
++        corrupted = good.replace(b"gguf fixture", b"BAD! fixture", 1)     # same size, so only the CRC notices
++        self.serve(corrupted)
++        self.cached(corrupted)
+         self.llama.mkdir()
+         user_file = self.llama / "user-file.txt"
+         user_file.write_text("keep until a source was unpacked", encoding="utf-8")
+@@ -102,6 +124,7 @@ class LlamaSourceArchive(unittest.TestCase):
+         self.assert_cache_removed()
+         self.assertTrue((self.archive.parent / "_unpack" / self.prefix / "ggml/CMakeLists.txt").is_file())
+         self.assertEqual(user_file.read_text(), "keep until a source was unpacked")
++        self.serve(good)                                     # the origin serves the good archive again
+         self.assert_installed(setup.get_llama_cpp())
+ 
+     def test_original_bad_zip_exception_is_preserved(self):
+@@ -169,5 +192,68 @@ class LlamaSourceArchive(unittest.TestCase):
+                     self.assertEqual(self.unrelated.read_text(), "keep this")
+ 
+ 
++    def test_the_archive_bytes_are_checked_against_the_recorded_sha256(self):
++        """A valid zip whose bytes are not the recorded ones is refused and removed, not unpacked: the commit says which
++        tree, the digest says which bytes."""
++        other = self.source.read_bytes().replace(b"ggml fixture", b"XXXX fixture", 1)    # same size, same names
++        self.cached(other)                                       # in the cache, and marked as downloaded
++        with self.assertRaises(SystemExit):
++            setup.get_llama_cpp()
++        self.assertIn("wrong SHA-256", self.out.getvalue())
++        self.assertFalse(self.archive.exists())
++        self.assertFalse(self.marker.exists())
++        self.assertFalse((self.archive.parent / "_unpack").exists())
++
++    def test_a_wrong_size_stops_before_hashes_a_thing(self):
++        self.digest[setup.LLAMA_CPP_COMMIT] = (1234, "0" * 64)
++        with self.assertRaises(SystemExit):
++            setup.get_llama_cpp()
++        self.assertIn("not 1,234", self.out.getvalue())
++
++    def test_strata_skip_sha256_says_so_and_goes_on(self):
++        self.digest[setup.LLAMA_CPP_COMMIT] = (1234, "0" * 64)   # wrong on purpose: the switch must skip it
++        with mock.patch.dict(os.environ, {"STRATA_SKIP_SHA256": "1"}):
++            self.assert_installed(setup.get_llama_cpp())
++        self.assertIn("STRATA_SKIP_SHA256=1", self.out.getvalue())
++
++    def test_no_recorded_digest_says_it_is_not_checked(self):
++        del self.digest[setup.LLAMA_CPP_COMMIT]
++        self.assert_installed(setup.get_llama_cpp())
++        self.assertIn("are not checked", self.out.getvalue())
++
++    def test_a_mark_without_its_archive_does_not_pass_for_verified(self):
++        """The zip and its mark go after unpacking; a mark left behind (an interrupted run) must not bless a later
++        download of it: with the file gone, the size is checked again and the run stops."""
++        size, sha = self.digest[setup.LLAMA_CPP_COMMIT]
++        self.marker.write_text(f"sha256 {sha}", encoding="utf-8")
++        self.assertFalse(self.archive.exists())
++        with self.assertRaises(SystemExit):
++            setup.verify_sha256(self.archive, size, sha)
++        self.assertIn("bytes, not", self.out.getvalue())
++
++    def test_a_member_that_steps_out_of_the_target_is_refused(self):
++        """zipfile has no filter="data" (that is tarfile's): the names are checked before anything is written."""
++        with zipfile.ZipFile(self.source, "w", compression=zipfile.ZIP_STORED) as z:
++            z.writestr(self.prefix + "/ggml/CMakeLists.txt", "ggml fixture")
++            z.writestr("../escape.txt", "outside")
++        self.sync(self.source.read_bytes())
++        with self.assertRaisesRegex(zipfile.BadZipFile, "outside the target"):
++            setup.get_llama_cpp()
++        self.assertFalse((self.root / "escape.txt").exists())
++        self.assertFalse((self.root.parent / "escape.txt").exists())
++
++    def test_a_symbolic_link_in_the_archive_is_reported(self):
++        with zipfile.ZipFile(self.source, "w", compression=zipfile.ZIP_STORED) as z:
++            z.writestr(self.prefix + "/ggml/CMakeLists.txt", "ggml fixture")
++            link = zipfile.ZipInfo(self.prefix + "/link")
++            link.external_attr = (0o120777 << 16)                # a symbolic link, as tar/zip spell it
++            z.writestr(link, "ggml/CMakeLists.txt")
++        self.sync(self.source.read_bytes())
++        result = setup.get_llama_cpp()
++        self.assertEqual(result, self.llama)
++        self.assertTrue((result / "ggml/CMakeLists.txt").is_file())
++        self.assertIn("symbolic link", self.out.getvalue())
++
++
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tools/test_setup_rocm_pins.py b/tools/test_setup_rocm_pins.py
+index 69f0d4ff..577681ad 100644
+--- a/tools/test_setup_rocm_pins.py
++++ b/tools/test_setup_rocm_pins.py
+@@ -1,13 +1,16 @@
+ """Tests for the per-family ROCm wheel choice of setup.py (#1103, #1267), against the version lists that AMD's TheRock
+-indexes really offered on 2026-10-07 (tools/test_setup_rocm_indexes.json), and for the sm_120 compiler warning that
+-now covers CUDA 13.2.0 / 13.2.1 only (#968).  No network, no GPU.
++indexes really offered on 2026-10-07 (tools/test_setup_rocm_indexes.json), for the sm_120 compiler warning that
++now covers CUDA 13.2.0 / 13.2.1 only (#968), and for the record of what the wheels really installed
++(rocm_installs / rocm_stamp / rocm_drift).  No network, no GPU.
+ 
+     python -m unittest tools.test_setup_rocm_pins
+ """
+ from __future__ import annotations
+ 
++import hashlib
+ import json
+ import sys
++import tempfile
+ import unittest
+ from pathlib import Path
+ from unittest import mock
+@@ -164,5 +167,161 @@ class Sm120Compiler(unittest.TestCase):
+             self.assertIsNone(setup.nvcc_build("nvcc"))
+ 
+ 
++class RocmInstalledRecord(unittest.TestCase):
++    """rocm_installs / rocm_stamp: what the wheels really installed, recorded where a later run can compare it.
++    TheRock's index publishes no hash for its wheels, so the fingerprint is pip's own per-file RECORD."""
++
++    def sitepackages(self, tmp, dists):
++        """A fake .venv site-packages with the RECORD files pip would have left (name -> RECORD contents)."""
++        sp = Path(tmp) / "site-packages"
++        for name, record in dists.items():
++            info = sp / name
++            info.mkdir(parents=True)
++            if record is not None:
++                (info / "RECORD").write_text(record, encoding="utf-8")
++        return sp
++
++    def read(self, sp):
++        with mock.patch.object(sys, "path", [str(sp), str(sp.parent / "lib")]):
++            return setup.rocm_installs()
++
++    def test_names_versions_and_record_hashes(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            sp = self.sitepackages(tmp, {
++                "rocm-7.10.0a20251120.dist-info": "rocm-7.10.0a20251120.dist-info/METADATA,,\nRECORD,,\n",
++                "rocm_sdk_core-7.10.0a20251120.dist-info": "bin/amd-smi,sha256=ij-kb96,250\n",
++                "rocm_sdk_libraries_gfx120x_all-7.10.0a20251120.dist-info": "lib/libhipblaslt.so,sha256=AAAA,1\n",
++                "numpy-2.1.0.dist-info": "numpy/__init__.py,sha256=BBBB,2\n",
++                "rocm_sdk_devel-7.10.0a20251120.dist-info": None,      # no RECORD: not counted
++            })
++            got = self.read(sp)
++        self.assertEqual(sorted(got), ["rocm", "rocm_sdk_core", "rocm_sdk_libraries_gfx120x_all"])
++        self.assertEqual(got["rocm"][0], "7.10.0a20251120")
++        want = hashlib.sha256(b"bin/amd-smi,sha256=ij-kb96,250\n").hexdigest()
++        self.assertEqual(got["rocm_sdk_core"][1], want)
++
++    def test_different_bytes_installed_are_a_different_record(self):
++        versions = {}
++        for record in ("lib/libhipblaslt.so,sha256=AAAA,1\n", "lib/libhipblaslt.so,sha256=CCCC,1\n"):
++            with tempfile.TemporaryDirectory() as tmp:
++                sp = self.sitepackages(tmp, {"rocm_sdk_libraries_gfx120x_all-7.10.0a20251120.dist-info": record})
++                versions[record] = self.read(sp)["rocm_sdk_libraries_gfx120x_all"][1]
++        self.assertNotEqual(*versions.values())
++
++    def test_no_site_packages_says_nothing_rather_than_failing(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            self.assertEqual(self.read(Path(tmp) / "site-packages"), {})
++
++    def test_the_stamp_carries_the_record_and_the_fallback_warning(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            sp = self.sitepackages(tmp, {"rocm-7.10.0a20251120.dist-info": "RECORD,,\n"})
++            with mock.patch.object(sys, "path", [str(sp)]):
++                plain = setup.rocm_stamp("7.10.0a20251120", "https://rocm.nightlies.amd.com/v2/gfx120X-all/")
++                fell = setup.rocm_stamp("7.13.0a20260515", "https://rocm.nightlies.amd.com/v2/gfx120X-all/",
++                                        "ROCm 7.10.0a20251120 is not on this index any more")
++        self.assertEqual(plain["installs"]["rocm"][0], "7.10.0a20251120")
++        self.assertNotIn("note", plain)
++        self.assertEqual(fell["version"], "7.13.0a20260515")
++        self.assertIn("not on this index", fell["note"])
++        self.assertTrue(fell["installs"])
++
++
++class RocmInstalledAgainstTheStamp(unittest.TestCase):
++    """rocm_root when the pinned wheel version is already the recorded one (no install to do): .venv's ROCm is checked
++    against what the stamp recorded, and a stamp written before the record existed is filled in without reinstalling."""
++
++    FAMILY = setup.rocm_family(setup.rocm_index("gfx1201"))
++    INDEX = setup.rocm_index("gfx1201")
++    PIN = setup.ROCM_FAMILY_PINS.get(FAMILY, setup.ROCM_VERSION_DEFAULT)
++
++    def rocm_root_here(self, tmp, stamp, dists):
++        """Run rocm_root with a fake .venv (bin/rocm-sdk, site-packages with RECORDs), a fake `rocm-sdk path --root`
++        answer, an empty ROCM_PATH (no system ROCm) and the stamp of `tmp` written as `stamp`.
++        Returns (the stamp on disk now, what setup said)."""
++        tmp = Path(tmp)
++        root = tmp / "sdk-root"
++        (root / "llvm" / "bin").mkdir(parents=True)
++        (root / "llvm" / "bin" / "clang++").write_text("")
++        (root / "lib").mkdir()
++        sp = tmp / "site-packages"
++        for name, record in dists.items():
++            (sp / name).mkdir(parents=True)
++            (sp / name / "RECORD").write_text(record, encoding="utf-8")
++        exe = tmp / "bin" / "python"
++        exe.parent.mkdir(parents=True)
++        exe.write_text("")
++        (exe.parent / "rocm-sdk").mkdir()
++        stamp_file = tmp / ".strata-rocm.json"
++        if stamp is not None:
++            stamp_file.write_text(json.dumps(stamp), encoding="utf-8")
++        said = []
++        saved = setup.os.environ.get("ROCM_PATH")
++        setup.os.environ["ROCM_PATH"] = str(tmp / "no-system-rocm")
++        try:
++            with mock.patch.object(setup.sys, "prefix", str(tmp)), \
++                    mock.patch.object(setup.sys, "executable", str(exe)), \
++                    mock.patch.object(setup.sys, "path", [str(sp)]), \
++                    mock.patch.object(setup, "ROCM_VERSION_OVERRIDE", None), \
++                    mock.patch.object(setup, "out", lambda cmd: str(root)), \
++                    mock.patch.object(setup, "ok", lambda msg="": said.append(msg)), \
++                    mock.patch.object(setup, "say", lambda msg="": said.append(msg)), \
++                    mock.patch.object(setup, "warn", lambda msg="": said.append(msg)):
++                setup.rocm_root(["gfx1201"])
++        finally:
++            if saved is None:
++                del setup.os.environ["ROCM_PATH"]
++            else:
++                setup.os.environ["ROCM_PATH"] = saved
++        return json.loads(stamp_file.read_text(encoding="utf-8")), "\n".join(said)
++
++    def stamp_and_dists(self, tmp, record="lib/libhipblaslt.so,sha256=AAAA,1\n", installs=True, digest=None):
++        """(stamp, dists) for a .venv holding one `rocm_sdk_libraries_gfx120x_all` wheel, and what its RECORD hashes to."""
++        dist = "rocm_sdk_libraries_gfx120x_all-" + self.PIN + ".dist-info"
++        want = hashlib.sha256(record.encode()).hexdigest()
++        stamp = {"version": self.PIN, "index": self.INDEX}
++        if installs:
++            stamp["installs"] = {"rocm_sdk_libraries_gfx120x_all": [self.PIN, digest or want]}
++        return stamp, {dist: record}, want
++
++    def test_installed_bytes_matching_the_stamp_say_nothing(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            stamp, dists, _ = self.stamp_and_dists(tmp)
++            now, said = self.rocm_root_here(tmp, stamp, dists)
++        self.assertNotIn("is not what setup installed", said)
++        self.assertEqual(now, stamp)
++
++    def test_changed_installed_bytes_are_warned_about_by_name(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            stamp, dists, _ = self.stamp_and_dists(tmp, digest="0" * 64)      # the stamp records other bytes
++            now, said = self.rocm_root_here(tmp, stamp, dists)
++        self.assertIn("is not what setup installed", said)
++        self.assertIn("rocm_sdk_libraries_gfx120x_all", said)
++        self.assertNotIn("Installing ROCm", said)                               # warned, not reinstalled
++
++    def test_a_dist_installed_without_being_recorded_is_warned_about(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            stamp, dists, _ = self.stamp_and_dists(tmp)
++            stamp["installs"] = {"rocm": [self.PIN, "0" * 64]}      # a record that does not know this dist is installed
++            _, said = self.rocm_root_here(tmp, stamp, dists)
++        self.assertIn("is not what setup installed", said)
++        self.assertIn("rocm_sdk_libraries_gfx120x_all", said)
++        self.assertIn("rocm", said)
++
++    def test_an_old_stamp_is_filled_in_without_reinstalling(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            stamp, dists, want = self.stamp_and_dists(tmp, installs=False)
++            now, said = self.rocm_root_here(tmp, stamp, dists)
++        self.assertNotIn("is not what setup installed", said)
++        self.assertNotIn("Installing ROCm", said)
++        self.assertEqual(now["installs"], {"rocm_sdk_libraries_gfx120x_all": [self.PIN, want]})
++
++    def test_drift_lists_changed_missing_and_extra(self):
++        recorded = {"rocm": ["1", "a"], "rocm_sdk_core": ["1", "b"], "rocm_sdk_devel": ["1", "c"]}
++        now = {"rocm": ["1", "a"], "rocm_sdk_core": ["1", "z"], "extra": ["1", "d"]}
++        self.assertEqual(setup.rocm_drift({"installs": recorded}, now),
++                         ["extra", "rocm_sdk_core", "rocm_sdk_devel"])
++        self.assertEqual(setup.rocm_drift({}, {}), [])
++
++
+ if __name__ == "__main__":
+     unittest.main()

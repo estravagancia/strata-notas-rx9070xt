@@ -1,0 +1,151 @@
+From 81a4e748e096b9490ed4920ce02135d80f019c38 Mon Sep 17 00:00:00 2001
+From: estravagancia <estravagancia@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 13:26:05 +0100
+Subject: [PATCH 2/2] tools/hip: gfx1200-hipblaslt-100200.txt, 67 rows
+ recalibrated with tune_hipblaslt on an RX 9070 XT (16 GiB, reports gfx1200 on
+ the 7.10.0a20251120 wheels) against hipBLASLt 1.2.0; prompts measured +1.2 %
+ at 4K and +2.0 % at 16K on that card, docs updated with what was and was not
+ measured
+
+---
+ docs/AMD_HIP.md                         | 19 +++++--
+ tests/terminal/test_hipblaslt_tuning.py |  2 +-
+ tools/hip/gfx1200-hipblaslt-100200.txt  | 69 +++++++++++++++++++++++++
+ 3 files changed, 86 insertions(+), 4 deletions(-)
+ create mode 100644 tools/hip/gfx1200-hipblaslt-100200.txt
+
+diff --git a/docs/AMD_HIP.md b/docs/AMD_HIP.md
+index 9dd8aaaf..02d4a282 100644
+--- a/docs/AMD_HIP.md
++++ b/docs/AMD_HIP.md
+@@ -119,8 +119,8 @@ What was run on real hardware:
+ - **Tuning tables (0.2.1):** each AMD package carries the hipBLASLt tuning tables of `tools/hip` that match the hipBLASLt it bundles, as
+   `tuning/<arch>-hipblaslt-<version>.txt` (listed and hashed in the package manifest), and records that version as `hipblaslt_version` in its
+   BUILD.json. Windows `rx9070` has the gfx1201 table, Windows `rdna3` the gfx1100 and gfx1151 ones (all hipBLASLt 1.5.0), Linux `rx7900` the
+-  gfx1100 one (1.2.0), Linux `halo` the gfx1151 one (1.4.1). The RX 6000 packages (`rx6000`, `rdna2`, 0.2.2) have none, because hipBLASLt has no gfx1030 / gfx1031 kernels. Linux `rx9070` has none: its wheels carry hipBLASLt 1.2.0 and no table in `tools/hip`
+-  is for that version (a table calibrated for it on an R9700 read prompts about 1% faster and decode 2% slower, so none is shipped).
++  gfx1100 one (1.2.0), Linux `halo` the gfx1151 one (1.4.1). The RX 6000 packages (`rx6000`, `rdna2`, 0.2.2) have none, because hipBLASLt has no gfx1030 / gfx1031 kernels. Linux `rx9070` has the gfx1200 one (1.2.0): the table tuned on an RX 9070 XT, which reports gfx1200 on those
++  wheels (they predate the gfx1200 / gfx1201 split); that package's gfx1201 card reaches it as a family sibling.
+   The engine start picks the table for the card and uses it only when the package's hipBLASLt version is the table's; otherwise it logs
+   why and the dense matrix products stay on plain hipBLAS. **A table changes which GEMM algorithm runs the prompt, so the rounding differs: the
+   answers are not bit-identical to plain hipBLAS** (first-token KL 0.016 on an R9700, see below). Packaged engines therefore use the table by
+@@ -545,7 +545,9 @@ an RX 9070 XT 16 GB and a Radeon AI PRO R9700 32 GB (both gfx1201), a Ryzen 9 39
+   - Ship status of `tools/hip/gfx1201-hipblaslt-*.txt`: the gfx120X wheel's hipBLASLt is 1.2.0 (version number 100200); the
+     tables here are 100202 and 100500, so the engine says "version mismatch ... using hipBLASEx" and runs plain hipBLAS. A
+     table tuned on the R9700 for 100200 (32 rows, `tune_hipblaslt`) measured within noise end to end (20K prompt x1.035 vs
+-    a noise arm x1.031), so none is shipped: the dense projections are ~10% of a 20K prompt here.
++    a noise arm x1.031), so none is shipped: the dense projections are ~10% of a 20K prompt here. A 1.2.0 table tuned
++    on an RX 9070 XT instead (67 rows, `tune_hipblaslt`; that card reports gfx1200 on these wheels) ships as
++    `gfx1200-hipblaslt-100200.txt`, and a gfx1201 card reaches it as a family sibling; its effect on an R9700 is not measured.
+   - The prompt path's QSA top-k picks its kernel by the blocks a query actually has, not the cache's capacity (#337,
+     bsorensen110): the same ids, on by default with AMD (NVIDIA keeps its capacity rule: there the 64K prompts read
+     1-3% slower with it). `STRATA_SELECT_WMMA=1` (opt-in, gfx12) adds #337's
+@@ -957,6 +959,17 @@ Shipped tables:
+   valid: the engine falls back to hipBLASEx for an id the library rejects, and the test still passes. Run it with
+   `STRATA_HIPBLASLT_VERBOSE=1` and look for `fallbacks=0` in its summary line, and recalibrate with
+   `tune_hipblaslt` before using this table with a different 1.5.0 build.
++- `gfx1200-hipblaslt-100200.txt`: RX 9070 XT (gfx1201, 16 GiB, Ryzen 7 9800X3D), recalibrated with `tune_hipblaslt
++  --workspace-mib 32` from the cases of `gfx1200-hipblaslt-100202.txt` (67 rows: 28 dense GEMM geometries at their T
++  buckets) against the hipBLASLt 1.2.0 (version number 100200) of the 7.10.0a20251120 gfx120X wheels setup installs for
++  RDNA4. Those wheels predate the gfx1200 / gfx1201 split and the card reports gfx1200 on them, which is the name the
++  file carries; setup stages it in the Linux `rx9070` package, and a gfx1201 card of that package reaches it as a family
++  sibling. End to end on engine 0.1.47 with IQ3_XXS on that box, bench runs from 2026-10-21 compared the same engine
++  with and without the table: prompt 4K 1,965.9 -> 1,989.5 tok/s (+1.2 %) and 16K 2,398.4 -> 2,445.9 (+2.0 %), chat decode
++  71.4 -> 70.6; the two runs ran at ctx 100000 and 105000, so their decode difference is confounded with the context. The
++  R9700's own 1.2.0 tuning (above) measured decode 2.1 % slower there and no 1.2.0 table stays shipped for gfx1201; what
++  this table does on an R9700 is not measured.
++
+ - `gfx1151-hipblaslt-100400.txt`: Radeon 8060S (Ryzen AI Max+ 395, gfx1151, 128 GB; Fedora 44, kernel 7.2.8),
+   calibrated with the ROCm 7.14.0a20260608 wheels that setup installs for gfx1151 since 0.1.40.2 (#1267): their
+   hipBLASLt is 1.4.0 (version number 100400), so neither `gfx1151-hipblaslt-100401.txt` nor `-100500.txt` applied and
+diff --git a/tests/terminal/test_hipblaslt_tuning.py b/tests/terminal/test_hipblaslt_tuning.py
+index ae2f0b9e..b5096666 100644
+--- a/tests/terminal/test_hipblaslt_tuning.py
++++ b/tests/terminal/test_hipblaslt_tuning.py
+@@ -27,7 +27,7 @@ import stage_tuning  # noqa: E402
+ PACKAGES = {
+     ("windows-x86_64", "rx9070"): (("gfx1200", "gfx1201"), 100500, {"gfx1201"}),
+     ("windows-x86_64", "rdna3"): (("gfx1100", "gfx1101", "gfx1102", "gfx1151"), 100500, {"gfx1100", "gfx1151"}),
+-    ("linux-x86_64", "rx9070"): (("gfx1200", "gfx1201"), 100200, set()),                    # no table for 1.2.0 on RDNA4 (docs/AMD_HIP.md)
++    ("linux-x86_64", "rx9070"): (("gfx1200", "gfx1201"), 100200, {"gfx1200"}),            # the RX 9070 XT table for 1.2.0; the package's gfx1201 card reaches it as a sibling
+     ("linux-x86_64", "rx7900"): (("gfx1100", "gfx1101", "gfx1102"), 100200, {"gfx1100"}),
+     ("linux-x86_64", "halo"): (("gfx1151",), 100401, {"gfx1151"}),
+     # 0.2.2 RX 6000 packages: hipBLASLt ships no gfx1030 / gfx1031 kernels at any version, so no table, plain hipBLAS
+diff --git a/tools/hip/gfx1200-hipblaslt-100200.txt b/tools/hip/gfx1200-hipblaslt-100200.txt
+new file mode 100644
+index 00000000..1d1b4aa1
+--- /dev/null
++++ b/tools/hip/gfx1200-hipblaslt-100200.txt
+@@ -0,0 +1,69 @@
++# solution IDs are scoped to this hipBLASLt version and device architecture
++STRATA_HIPBLASLT_TUNING_V1 gfx1200 100200
++bf16 10240 2560 10240 2560 23848
++bf16 10240 2560 10240 256 23849
++bf16 10240 2560 10240 512 23849
++bf16 10240 320 10240 2560 23848
++bf16 10240 320 10240 256 23848
++bf16 10240 320 10240 512 23849
++bf16 12288 2560 12288 2560 23848
++bf16 12288 2560 12288 256 23868
++bf16 2560 10240 10240 256 23091
++bf16 2560 10240 10240 512 23091
++bf16 2560 12288 2560 256 23091
++bf16 2560 2560 2560 2560 23257
++bf16 2560 2560 2560 256 23281
++bf16 2560 2560 2560 512 23388
++bf16 2560 512 4096 512 23091
++bf16 2560 6144 2560 2560 23091
++bf16 2560 640 2560 2560 23260
++bf16 2560 640 2560 256 23302
++bf16 2560 640 2560 512 23091
++bf16 2560 96 4096 37 23098
++bf16 2560 96 4096 48 23118
++bf16 320 10240 320 2560 23280
++bf16 320 10240 320 256 23252
++bf16 48 2560 96 4096 23858
++bf16 6144 2560 6144 2560 23848
++bf16 6144 2560 6144 256 23868
++bf16 6144 2560 6144 512 23848
++bf16 640 2560 640 2560 23157
++bf16 640 2560 640 256 23138
++bf16 640 2560 640 512 23105
++f16 10240 2560 10240 2560 48626
++f16 10240 2560 10240 256 48626
++f16 10240 2560 10240 512 48703
++f16 10240 320 10240 2560 48635
++f16 10240 320 10240 256 48626
++f16 10240 320 10240 512 48626
++f16 12288 2560 12288 2560 48637
++f16 12288 2560 12288 256 48646
++f16 12288 2560 12288 512 48626
++f16 2560 10240 10240 2560 47870
++f16 2560 10240 10240 256 47870
++f16 2560 10240 10240 512 47267
++f16 2560 12288 2560 2560 47870
++f16 2560 12288 2560 256 48207
++f16 2560 12288 2560 512 47870
++f16 2560 2560 2560 2560 48172
++f16 2560 2560 2560 256 48167
++f16 2560 2560 2560 512 48060
++f16 2560 512 4096 37 47893
++f16 2560 512 4096 512 47870
++f16 2560 6144 2560 2560 47870
++f16 2560 6144 2560 256 47870
++f16 2560 6144 2560 512 47870
++f16 2560 640 2560 2560 47942
++f16 2560 640 2560 256 48081
++f16 2560 640 2560 512 48033
++f16 2560 96 4096 48 47897
++f16 320 10240 320 2560 48059
++f16 320 10240 320 256 48333
++f16 320 10240 320 512 48128
++f16 512 2560 512 4096 48065
++f16 6144 2560 6144 2560 48626
++f16 6144 2560 6144 256 48646
++f16 6144 2560 6144 512 48637
++f16 640 2560 640 2560 48050
++f16 640 2560 640 256 48078
++f16 640 2560 640 512 48031
+-- 
+2.53.0
+

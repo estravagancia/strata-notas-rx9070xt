@@ -1,0 +1,63 @@
+{
+  "exe": "/home/TU-USUARIO/.local/share/strata/components/engine/0.1.50-linux-x86_64-hip-rx9070/strata",
+  "args": [
+    "--pack", "/home/TU-USUARIO/Strata-data/packs/iq3_s",
+    "--native", "/home/TU-USUARIO/Strata-data/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+    "--ple-gguf", "/home/TU-USUARIO/Strata-data/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+    "--expert-profile", "/home/TU-USUARIO/Strata/data/expert-profile.bin",
+    "--expert-cache", "auto",
+    "--prefill", "auto",
+    "--spec", "4",
+    "--spec-min-p", "0.5",
+    "--mtp", "/home/TU-USUARIO/Strata-data/mtp/rt",
+    "--max-context", "131072",
+    "--kv", "int8",
+    "--vram-reserve-mib", "1536",
+    "--adapt-async", "1",
+    "--kv-grow", 
+    "--aux-cpus", "auto",
+    "--control-vector-scaled", "/home/TU-USUARIO/Strata-data/models/IQ3_XXS/Huihui-Qwen3.8-Flash-Next-refusal-direction-r.gguf:1.0",
+    "--control-vector-layer-range", "4", "44",
+    "--cvec-mode", "project",
+    "--cvec-dir", "per-layer",
+    "--vision",
+    "--conversation-cache-mib", "5376",
+    "--conversation-cache-slots", "4",
+    "--prompt-cache-tail"
+  ],
+  "env": {
+    "STRATA_HIP_WMMA": "1",
+    "STRATA_HC_Q8": "0",
+    "STRATA_HIP_VMM": "0",
+    "STRATA_SELECT_WMMA": "1",
+    "STRATA_HIPBLASLT_TUNING": "/home/TU-USUARIO/Strata/tools/hip/gfx1200-hipblaslt-100200.txt",
+    "MALLOC_MMAP_THRESHOLD_": "16777216"
+  },
+  "fit_max_tokens": true,
+  "draft_vocab": "en",
+  "expert_profile_save": "expert-profile-learned.bin",
+  "slot_save_path": "/home/TU-USUARIO/Strata/sessions",
+  "reasoning_budget_tokens": 32768,
+  "cwd": "/home/TU-USUARIO/Strata",
+  "tokenizer": "/home/TU-USUARIO/Strata-data/packs/iq3_s/tokenizer",
+  "model_name": "qwen3.8-flash-next-iq3_s",
+  "log": "/home/TU-USUARIO/Strata/strata-iq3_s.log",
+  "lib_dirs": [
+    "/home/TU-USUARIO/.local/share/strata/components/engine/0.1.50-linux-x86_64-hip-rx9070",
+    "/home/TU-USUARIO/Strata/.venv/lib/python3.14/site-packages/_rocm_sdk_devel/lib",
+    "/home/TU-USUARIO/Strata/.venv/lib/python3.14/site-packages/_rocm_sdk_libraries_gfx120X_all/lib"
+  ],
+  "host": "127.0.0.1",
+  "port": 8081,
+  "backend": "hip",
+  "gpu": 0,
+  "gpus_asked": true,
+  "vision": {
+    "exe": "/home/TU-USUARIO/.local/share/strata/components/engine/0.1.50-linux-x86_64-hip-rx9070/strata-vision",
+    "mmproj": "/home/TU-USUARIO/Strata-data/models/mmproj-Qwen3.8-Flash-Next-Q8_0.gguf",
+    "model": "/home/TU-USUARIO/Strata-data/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+    "gpu": false,
+    "max_tokens": 300,
+    "threads": 8
+  }
+}
