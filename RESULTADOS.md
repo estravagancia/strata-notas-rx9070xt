@@ -13,8 +13,12 @@
   la línea resumen del script muestra la **mediana**. No mezclar las dos.
 - Nada de comparar con la serie anterior al 23-10 (aquella se midió "en caliente" y no
   es comparable en absoluto).
+- **Cada bloque de la tabla lleva su configuración**: el 26-10 el contexto pasó de
+  98.304 a 131.072 y el 27-10 cambió la reserva de VRAM; el 30-10 pasamos a un runtime
+  ROCm propio. Comparar entre bloques arrastra esos cambios; dentro de un bloque los
+  A/B cambian una sola variable.
 
-## Serie principal (motor frío, IQ3_XXS, contexto 98.304)
+## Serie 23-10 → 25-10 (IQ3_XXS, contexto 98.304, wheels 7.10)
 
 | Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
 |---|---|---|---|---|---|
@@ -52,10 +56,52 @@ números de prefill son limpios):
 | primer token (4K) | 2,065 s | 2,042 s |
 | chat tok/s | 71,4 | 70,6 (mezclado con el contexto, achacar con cuidado) |
 
-## Producción actual (27-10, IQ3_S, contexto 131.072)
+## Serie 27-10 → 29-10 (IQ3_XXS, contexto 131.072, wheels 7.10, config "ADR-017")
 
-Con la config final (motor 0.1.50, `--spec-min-p 0.5`, reserva 1.536 MiB,
-`STRATA_SELECT_WMMA=1`, subset español): un request real de 16.646 tokens de entrada
-produjo **2.181 tok/s de prefill y 78,3 tok/s de salida** (medida puntual del propio
-servidor, no del bench; el A/B formal de la config IQ3_S contra la serie IQ3_XXS está
-pendiente — **no comparar** estas cifras con la tabla de arriba: son otro modelo).
+La config pasa a: contexto 131.072, `--spec-min-p 0.50`, reserva 1.536 MiB, `--kv int8`,
+`--kv-resident 16384`, `STRATA_EXPDEC=0`, `STRATA_PLE_AUTO_RAM=0`, `STRATA_HIP_WMMA=1`.
+
+| Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+|---|---|---|---|---|---|
+| `-0150-control` (27-10) | 0.1.50 | 79,1 | 2.002,4 | 2.789,8 | control de la config nueva |
+| `-0152-new` (27-10) | 0.1.52 | 72,1 | — | — | defaults nuevos de gfx12 → **−8,8 % chat**, no adoptado |
+| `-0152-026` (27-10) | 0.1.52 | 79,3 | — | — | `STRATA_DEFAULTS=026` → neutro |
+| `-0152-kernelsoff` (27-10) | 0.1.52 | 77,7 | — | — | sin kernels nuevos |
+| `0152-off-expdec` (27-10) | 0.1.52 | 79,4-82,1 | — | — | `STRATA_EXPDEC=0` → **+2,1 % chat, adoptado** |
+| `-ctrl0152c` (29-10) | 0.1.52 | 78,1 / 78,1 | 1.988,4 | 2.778,1 | control del día |
+| `-262k-a` / `-262k-b` (29-10) | 0.1.52 | 56,0 / 56,6 | 1.988 | 2.778 | contexto 262k + `--pcie-frac 0` + `--adapt-every 0` → **−28 % chat**, rollback |
+
+## Serie 30-10 → 31-10 (runtime ROCm propio, tabla 100500)
+
+El 30-10 el motor oficial corre sobre un runtime ROCm propio (10.1 y luego 10.3 nightly,
+hipBLASLt 1.5.0) sin recompilar; el 31-10 llega el motor 0.1.55 con la ruta GDN chunked
+en gfx12.
+
+| Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+|---|---|---|---|---|---|
+| `-0154-plain` / `-b` (30-10) | 0.1.54 | 80,4 / 79,2 | 2.009,3 / 1.974,0 | 2.793,5 / 2.783,9 | wheels 7.10, control |
+| `-0154-specp70-a/-b` (30-10) | 0.1.54 | −0,1 % / +2,4 % | plano | plano | `--spec-min-p 0.70` → neutro, se queda 0,50 |
+| `-rocm10-100401` (30-10) | 0.1.54 | 83,3 | 1.919,0 | 2.763,1 | ROCm 10.1 + tabla 100401 |
+| `-rocm103-100500` (30-10) | 0.1.54 | 83,2 | 1.961,6 | 2.805,1 | ROCm 10.3 + tabla 100500 → **adoptado** |
+| `-0155-off-a/-b` (31-10) | 0.1.55 | 81,8 / 82,3 | 1.932,6 / 1.953,0 | 2.791,1 / 2.801,6 | GDN apagado (control del día) |
+| `-0155-gdn-a/-b` (31-10) | 0.1.55 | 80,5 / 81,7 | **2.050,8 / 2.025,1** | **2.977,0 / 2.966,1** | `STRATA_GDN_CHUNKED=1` → **+6,1 %/+3,7 % 4K, +6,7 %/+5,9 % 16K, adoptado** |
+
+Lecturas:
+
+- **GDN chunked gfx12** (motor 0.1.55) es la ganancia de prefill más grande de todas las
+  medidas aquí, y viene de serie en A/B del mismo día: 4K **+6,1 %/+3,7 %**, 16K
+  **+6,7 %/+5,9 %**, primer token −4 %/−6 %, chat −1,6 %/−0,7 % (dentro del ruido de
+  ±1,5 % del motor) y agente sin cambio.
+- El runtime ROCm propio (30-10) dio chat **+3,5 %** y agente **+2,5 %** con prefill casi
+  igual; el 10.1 pagaba −4,4 % en 4K y el 10.3 lo recuperó (+2,2 % de 4K sobre el 10.1).
+  Ver [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) y la premisa gfx1201 desmentida en
+  [HARDWARE.md](HARDWARE.md).
+- `0155-off` cae dentro de la banda del control `-rocm103-100500` (−1,7 % de chat como
+  peor caso): el motor nuevo no aporta ni cuesta por sí solo; lo que aporta es GDN.
+
+## Producción actual (31-10, IQ3_XXS, contexto 131.072)
+
+Motor **0.1.55** + `STRATA_GDN_CHUNKED=1` + `STRATA_EXPDEC=0` sobre ROCm 10.3 propio:
+chat **80,5-81,7** tok/s, prefill **2.025-2.051** (4K) y **2.966-2.977** (16K), primer
+token **1,98-2,01 s / 5,42-5,46 s**. Medida puntual del servidor real (no del bench) el
+mismo día: respuesta completa en ~1,2 s para un prompt corto.

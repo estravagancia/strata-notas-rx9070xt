@@ -85,12 +85,59 @@ formal pendiente). Además: **subset de vocabulario en español** para el cabeza
 predictor MTP (ver [data/README.md](data/README.md)): +0,8 % en chat y +2,8 puntos
 porcentuales de borradores aceptados, con 93 MiB menos de VRAM.
 
-## 27-10 — Estado actual
+## 27-10 — Estado de entonces
 
 Motor **0.1.50 oficial**, modelo **IQ3_S**, contexto 131.072, subset español activo,
 servidor a la escucha en la red local con el servidor endurecido (parche del 19-10
 aplicado sobre v0.1.45 del clon). Documentación del clon sincronizada con v0.2.6.
 
+## 27-10 (noche) — Motor 0.1.52: los defaults de gfx12 cuestan un 8,8 %
+
+El paquete oficial de v0.2.7 (motor 0.1.52) traía cuatro interruptores nuevos de
+decodificación y un reparto distinto de la ventana PCIe. Tal cual: **chat −8,8 %**
+(91,7 → 71,5 tok/s en el primer prompt). La caza de culpables mostró que **ninguno
+individual** lo explica — el daño aparece con los cuatro activos — y que apagando
+`STRATA_EXPDEC` se recupera **+2,1 %** sobre el control (6 de 6 corridas positivas).
+Se adoptó el 0.1.52 con `STRATA_EXPDEC=0` y `STRATA_PLE_AUTO_RAM=0`.
+
+## 29-10 — Un experimento que salió mal y su rollback
+
+El usuario subió a mano el contexto a 262.144, el `--kv-resident` a 32.768 y añadió
+`--pcie-frac 0` y `--adapt-every 0`. Medido en frío: **chat −28 %** y agente −21 %, con
+prefill plano. La causa: sin la capa adaptativa el acierto de la caché de expertos cae de
+~85 % a 60-68 % y sin lecturas PCIe no hay de dónde reponer. Rollback a la config
+anterior y lección: `--adapt-every 0` **no** es gratis. (Ver [LO-QUE-NO-FUNCIONO.md](LO-QUE-NO-FUNCIONO.md).)
+
+## 30-10 — Motor 0.1.54 y runtime ROCm propio
+
+El paquete oficial de v0.2.8 (motor 0.1.54) corrige un contador de ranuras de la caché de
+expertos y dos fallos de arranque; en frío resultó **neutro o un pelín mejor** que el
+0.1.52 y se quedó (con los mismos `STRATA_EXPDEC=0`, `STRATA_PLE_AUTO_RAM=0`,
+`STRATA_HIP_WMMA=1`).
+
+El descubrimiento del día fue otro: **el motor oficial corre sin recompilar sobre wheels
+de ROCm más nuevos** que los 7.10 que empaqueta la release, con solo cambiar `lib_dirs`.
+Probado con 10.1 (estable) y 10.3 (nightly): chat **+3,5 %** y agente **+2,5 %**, con
+prefill casi igual. Adoptado 10.3 con su tabla de hipBLASLt 1.5.0 regenerada en casa
+(168 filas). La idea que perseguíamos ("ROCm 10.x rotula gfx1201 y por eso va más rápido")
+quedó **desmentida**: en Linux sigue diciendo gfx1200; lo que rinde es el stack BLAS.
+
+## 31-10 — Motor 0.1.55 con GDN chunked en gfx12: la ganancia de prefill más grande
+
+El paquete oficial de v0.2.9 (motor 0.1.55) trae `STRATA_GDN_CHUNKED`: la recurrencia GDN
+del prefill pasa por un kernel con tensor cores para gfx12. En A/B del mismo día:
+**4K +6,1 %/+3,7 %**, **16K +6,7 %/+5,9 %**, primer token −4/−6 %, chat dentro del ruido y
+agente sin cambio. Detectado de antemano comparando los binarios: el kernel
+(`gdn_w12_scan_kernel`) no existe en 0.1.54. Se adoptó, y antes de tocar producción se
+hizo un *soak* de concurrencia (12 requests con 3 clientes a la vez + 10 minutos
+continuos, 872 requests, 0 fallos), porque el contrato de la ruta chunked dice que usa un
+único buffer de trabajo por dispositivo.
+
+El mismo día, el servidor Python se puso al día con v0.2.9 (tres correcciones de
+comportamiento: cierre de bloques de código en el render, herramientas "retiradas" del
+turno que siguen contando si la conversación las usó, y el lector de imágenes siguiendo al
+motor tras un cambio de versión) y la documentación del clon se resincronizó con v0.2.9.
+
 Lección de fondo de todo el mes: **casi todo lo que prometía era ruido, y lo que funcionó
-son cuatro cosas concretas y medidas** (tabla C2, subset español, reserva/flags de la
-config final y el protocolo de medición en sí).
+son seis cosas concretas y medidas** (tabla C2, subset español, reserva/flags de la config
+final, el protocolo de medición en sí, el runtime ROCm propio y GDN gfx12).

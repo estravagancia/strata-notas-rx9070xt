@@ -27,6 +27,14 @@ gfx1201, pero el motor con esos wheels sigue arrancando como gfx1200. El motor l
 compiladas **ambas** arquitecturas (`gfx1200;gfx1201`), así que el motor funciona igual;
 lo que cambia es **qué tabla de ajuste encuentra**.
 
+**Actualización (2026-10-30, con ROCm 10.3 propio): la sospecha "ROCm 10.x rotula gfx1201
+en Linux" es falsa.** El runtime 10.3, su `rocminfo` y su propio afinador de hipBLASLt
+siguen diciendo **gfx1200** en esta tarjeta; el rótulo gfx1201 que aparece en Windows es
+del driver de Windows. Lo que da velocidad no es el nombre de la arquitectura: es el stack
+BLAS más nuevo (chat +3,5 % al pasar de los wheels 7.10 a ROCm 10.3, ver
+[LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md)). Los kernels nuevos de v0.2.9 para gfx12 (GDN
+chunked) sí rinden igual aquí con el nombre "hermano".
+
 ## Cómo encaja el hardware en el rendimiento
 
 - Los 83 GB del modelo no caben en VRAM: Strata mantiene en la tarjeta lo caliente

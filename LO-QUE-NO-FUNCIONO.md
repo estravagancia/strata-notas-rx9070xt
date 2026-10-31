@@ -73,6 +73,36 @@ Upstream ya lo midió en familias RDNA 4: *"gfx1201 (R9700): slower on every pro
 Confiamos en esa medida; no la replicamos (lo decimos para que no cuenten esto como
 medida nuestra).
 
+
+## Los defaults nuevos de gfx12 del motor 0.1.52 → **chat −8,8 %**
+
+El lanzamiento v0.2.7 (motor 0.1.52) traía cuatro interruptores de decodificación nuevos
+para gfx12 y un reparto distinto de la ventana PCIe. Con los defaults tal cual: chat
+**91,7 → 71,5 tok/s (−8,8 %)** y borradores aceptados 81,9 % → 56,9 %. Probamos apagar los
+cuatro de uno en uno: **cada uno recupera el prompt 0** (ningún culpable único; el daño
+necesita los cuatro activos). Con `STRATA_DEFAULTS=026` (los defaults viejos) queda
+neutro (+0,2 %). La solución que se adoptó fue más fina: **solo `STRATA_EXPDEC=0`** da
++2,1 % sobre el control (6 de 6 corridas), y los otros tres se quedaron como vinieron.
+Lección: un default de upstream no está medido en tu tarjeta; apágalo si tu A/B lo pide.
+
+## Contexto 262.144 + `--pcie-frac 0` + `--adapt-every 0` → **chat −28 %**
+
+El 29-10 se subieron a mano tres knobs a la vez (contexto 262k, `--kv-resident 32768`,
+reserva 1.024 MiB) y se apagaron dos mecanismos (`--pcie-frac 0`, `--adapt-every 0`). En
+frío: chat **56,0-56,6 vs 78,1** del control (−28 %) y agente −21 %, con prefill plano. El
+trio contexto/reserva no era el culpable (los contadores de KV salen idénticos); lo que
+mata es la **capa adaptativa apagada** (acierto de la caché de expertos 85 % → 60-68 %)
+sumada a **cero lecturas PCIe** (sin ellas no se repone la caché). Rollback hecho el mismo
+día. Si alguien quiere contexto 262k, que suba primero el contexto solo y mida; no toque
+`--adapt-every` sin A/B.
+
+## `--spec-min-p 0.70` sobre el motor 0.1.54 → neutro (y por qué se queda 0,50)
+
+A/B del 30-10 con dos corridas por brazo: chat **−0,1 % / +2,4 %** (gate ≥ +1,5 % en las
+dos, no cumplido). Un detalle bonito: los borradores aceptados suben **+11 puntos**
+(61-63 % → 72,6-74,3 %) pero el rendimiento no, porque aceptar más tarde no compra
+tokens extra. El primer token mejora un pelo en 4K/16K (≈50-70 ms). Se queda 0,50.
+
 ## Y un aviso sobre el propio proceso
 
 Dos notas de rendimiento que dábamos por ciertas resultaron ser falsas en su día (una

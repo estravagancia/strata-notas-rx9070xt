@@ -24,10 +24,10 @@
 #   bench/run-bench.sh det035 --det
 #   bench/run-bench.sh det060 --det --extra "--pcie-frac 0.6"
 
-ROOT=/home/TU-USUARIO/Strata
+ROOT=/home/estravagancia/Strata
 PY=$ROOT/.venv/bin/python
-HEALTH=http://127.0.0.1:8081/health
-URL=http://127.0.0.1:8081
+HEALTH=http://192.168.0.35:8081/health
+URL=http://192.168.0.35:8081
 
 LABEL=$1; [ -n "$LABEL" ] || { echo "uso: $0 LABEL [--det] [--extra ARGS] [--config JSON]" >&2; exit 64; }
 shift

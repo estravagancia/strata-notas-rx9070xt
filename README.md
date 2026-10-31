@@ -11,14 +11,21 @@ los produjo. Donde no hay medida, lo decimos.
 
 ## Qué consiguió esta caja
 
-Con el modelo **Qwen3.8-Flash-Next IQ3_S** (83,6 GB en disco, 16 GiB de VRAM y 60 GB de RAM):
+Con el modelo **Qwen3.8-Flash-Next IQ3_XXS** (75,8 GB en disco, 16 GiB de VRAM y 60 GB de RAM)
+y el motor **0.1.55** sobre un runtime **ROCm 10.3 propio** (ver más abajo):
 
 | Métrica | Valor |
 |---|---|
-| Escritura tipo chat (dominio común) | ~78 palabras por segundo (tokens/s de salida) |
-| Relectura de un texto de 4.000 tokens | ~1.930 tokens/s (empieza a responder en ~2 s) |
-| Relectura de 16.000 tokens | ~2.380 tokens/s |
+| Escritura tipo chat (dominio común) | ~81 tokens/s de salida |
+| Relectura de un texto de 4.000 tokens | **~2.035 tokens/s** (empieza a responder en ~2 s) |
+| Relectura de 16.000 tokens | **~2.970 tokens/s** (primer token en ~5,4 s) |
 | Contexto máximo | 131.072 tokens |
+
+La última ganancia grande es de upstream: el motor 0.1.55 (lanzamiento v0.2.9) trae la
+ruta **GDN chunked con tensor cores en gfx12**, que aquí dio **+6 % en 4K y +6 % en 16K**
+medido en frío (ver [RESULTADOS.md](RESULTADOS.md)). Y una segunda, menos obvia: el motor
+oficial corre **sin recompilar** sobre wheels de ROCm más nuevos que los que empaqueta la
+release (ver [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md)).
 
 Lo interesante no es la cifra, sino **por qué** se llegó a ella y qué experimentos
 quedaron por el camino: hay una lista de cosas que mejoraron de verdad y una lista, más
@@ -35,8 +42,16 @@ larga y más útil, de cosas que se midieron y **no** mejoraron nada.
 5. [patches/](patches/) — los 2 parches que preparamos para Strata (aún no enviados),
    el endurecimiento de seguridad del servidor y un ajuste de vocabulario en español.
 6. [configs/](configs/) y [scripts/](scripts/) — la configuración real y el script de medidas.
-7. [benches/muestras/](benches/muestras/) — 3 mediciones completas para que audites las tablas.
+7. [benches/muestras/](benches/muestras/) — 5 mediciones completas para que audites las tablas.
 8. [CREDITOS.md](CREDITOS.md) — de dónde viene cada pieza.
+
+## Estado actual (31-10-2026)
+
+Motor **0.1.55** oficial (lanzamiento v0.2.9) con `STRATA_GDN_CHUNKED=1`, `STRATA_EXPDEC=0`
+y `STRATA_PLE_AUTO_RAM=0`, sobre **ROCm 10.3 propio** (hipBLASLt 1.5.0, tabla de 168 filas
+regenerada aquí) y modelo **IQ3_XXS**, contexto 131.072. Servidor Python al día con v0.2.9
+(tres correcciones de comportamiento respecto a v0.2.8). La documentación del clon es
+espejo de v0.2.9 más dos bloques de endurecimiento propio.
 
 ## Aviso
 
