@@ -15,6 +15,10 @@ Measured on 2026-11-05 with `tools/strata_bench.py` (suite 1, 3 runs per test, m
 - Model and quantization: qwen3.8-flash-next-iq3_xxs
 - Context: 131072 tokens; parallel slots: 1
 - Settings: the install's own configuration, unchanged; thinking off for the suite; temperature 0
+- A/B variable (the bench tool does not record environment variables in results.json): this
+  run used the 0.1.57 default gfx12 prompt staging ring (256 slots below ~6K tokens, 192
+  up to 12K, 96 above; upstream documents the change in `DETAILS.md` of v0.2.11). The
+  paired control (`engine-0.1.57-ring0`) disabled it with `STRATA_GFX12_RING=0`.
 
 ## Method
 

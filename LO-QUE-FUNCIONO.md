@@ -126,10 +126,16 @@ drafter es mucho más ancho (69,4-126,2). En el dominio favorable el techo sube 
 balance. Con `--draft-fallback none` no hay vuelta al MTP en caliente: el rollback es
 quitar el `--draft` de la config.
 
-## 9. Anillo de preparación de prompt más profundo (motor 0.1.57)
+## 9. Anillo de preparación de prompt más profundo (motor 0.1.57, `STRATA_GFX12_RING`)
 
-**Qué:** el 0.1.57 profundiza el anillo que prepara la lectura del prompt por adelantado
-(más trabajo de prefill encadenado mientras se atiende la petición en curso).
+**Qué:** el 0.1.57 profundiza el anillo de preparación (*staging ring*) por el que pasan
+los trozos del prompt antes de leerlos en la GPU: 256 ranuras por debajo de ~6K tokens,
+192 hasta 12K y 96 por encima (antes: 96 en todos los tamaños). La ganancia es
+bit-exacta (upstream la documenta en `DETAILS.md` de v0.2.11 con +16 % en 4K en un R9700).
+No hace falta activar nada: viene de serie. El control del A/B se hizo desactivándolo con
+`STRATA_GFX12_RING=0` (la otra vuelta atrás documentada es `STRATA_PREFILL_RING=96`).
+En los binarios se comprueba el cambio de familia: la variable no existe en 0.1.55/0.1.56
+y sí en 0.1.57.
 
 **Cuánto (A/B en frío, 05-11, IQ3_XXS, contexto 131.072, `--long`):**
 
@@ -143,4 +149,6 @@ quitar el `--draft` de la config.
 
 **Lo que hay que saber:** la ganancia se concentra en los 4K; a 16K y 32K el cuello ya
 es otro (PCIe/swap de expertos) y el anillo no lo mueve. Es la mayor ganancia de prefill
-desde GDN y viene de serie en el motor: no hay bandera que activar.
+desde GDN; nuestro +10,7 % en 4K queda por debajo del +16 % que mide upstream en R9700,
+pero en la misma dirección. Si algún día da problemas, el rollback es una variable:
+`STRATA_GFX12_RING=0`.

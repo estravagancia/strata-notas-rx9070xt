@@ -14,8 +14,8 @@ expertos, `pcie_frac`, cachés…).
 | `gdn-0.1.55-gdn/` | `-0155-gdn-b` (31-10) | 0.1.55 + ROCm 10.3 + **`STRATA_GDN_CHUNKED=1`** (adoptado) |
 | `mtp-0.1.56-control/` | `-mtp-0156-control` (03-11) | 0.1.56 con cabezal MTP (control del A/B del drafter) |
 | `df2-0.1.56-draft/` | `-df2-0156-draft` (03-11) | 0.1.56 + **`--draft dflash2`** (adoptado) |
-| `engine-0.1.57-ring0/` | `-ring0-0157` (05-11) | 0.1.57, anillo de preparación de prompt en 0 (control; usa `--long`, añade 32K) |
-| `engine-0.1.57-anillo/` | `-anillo-0157` (05-11) | 0.1.57 con el anillo más profundo (adoptado; usa `--long`) |
+| `engine-0.1.57-ring0/` | `-ring0-0157` (05-11) | 0.1.57 con `STRATA_GFX12_RING=0` (control; usa `--long`, añade 32K) |
+| `engine-0.1.57-anillo/` | `-anillo-0157` (05-11) | 0.1.57 con el anillo de prompt por defecto, 256/192/96 (adoptado; usa `--long`) |
 
 Hay tres A/B publicados por parejas: el del 31-10 (GDN chunked), el del 03-11 (DFlash2
 frente al cabezal MTP) y el del 05-11 (anillo de prompt). Comparar solo dentro de la

@@ -151,8 +151,10 @@ varianza del borrador se nota. Se adoptó: la config de producción usa `--draft
 
 ## 05-11 — Motor 0.1.57: anillo de preparación de prompt más profundo (+10,7 % en 4K)
 
-El 0.1.57 profundiza el anillo que prepara la lectura del prompt por adelantado. A/B del
-mismo día (control con el anillo en 0): **4K 2.322,6 vs 2.098,0 (+10,7 %)**, 16K y 32K
+El 0.1.57 profundiza el anillo de preparación de prompt de gfx12 (`STRATA_GFX12_RING`:
+256 ranuras bajo ~6K, 192 hasta 12K, 96 arriba; antes 96 en todo; upstream reporta
++16 % en 4K). A/B del mismo día (control desactivándolo con `STRATA_GFX12_RING=0`):
+**4K 2.322,6 vs 2.098,0 (+10,7 %)**, 16K y 32K
 dentro del ruido (±0,2 %); chat 82,2 vs 79,3. Se adoptó. Desde ese día el script de
 medida añade el prompt de 32K (`--long`): **3.055,5 tok/s, 10,5 s hasta el primer
 token**. Muestras: `benches/muestras/engine-0.1.57-ring0` y `engine-0.1.57-anillo`.

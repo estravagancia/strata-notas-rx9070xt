@@ -103,8 +103,8 @@ Lecturas:
 
 El 03-11, A/B en el mismo día del drafter **DFlash2** (pack `q4_0` dedicado,
 `--draft-fallback none`, `--draft-conf 0.7`) contra el cabezal MTP de siempre. El 05-11,
-con el motor **0.1.57** instalado, A/B del **anillo de preparación de prompt más
-profundo** (control: anillo en 0). Las corridas del 05-11 usan `strata_bench.py --long`,
+con el motor **0.1.57** instalado, A/B del **anillo de preparación de prompt de gfx12**
+(256/192/96 ranuras por defecto; control: `STRATA_GFX12_RING=0`). Las corridas del 05-11 usan `strata_bench.py --long`,
 que añade el prompt de 32K; las anteriores no son comparables en esa métrica. Muestras
 completas en [benches/muestras/](benches/muestras/).
 
@@ -112,8 +112,8 @@ completas en [benches/muestras/](benches/muestras/).
 |---|---|---|---|---|---|
 | `-mtp-0156-control` (03-11) | 0.1.56 | 77,0 | 2.046,1 | 3.041,5 | cabezal MTP (control del A/B) |
 | `-df2-0156-draft` (03-11) | 0.1.56 | **81,2** | 2.040,8 | 3.071,4 | `--draft dflash2` → **+5,5 % chat (mediana)**, 4K/16K planos, **adoptado** |
-| `-ring0-0157` (05-11) | 0.1.57 | 79,3 | 2.098,0 | 3.099,6 | anillo en 0 (control); 32K: 3.067,2 |
-| `-anillo-0157` (05-11) | 0.1.57 | 82,2 | **2.322,6** | 3.098,8 | anillo más profundo → **4K +10,7 %**, **adoptado**; 32K: 3.055,5 |
+| `-ring0-0157` (05-11) | 0.1.57 | 79,3 | 2.098,0 | 3.099,6 | `STRATA_GFX12_RING=0` (control); 32K: 3.067,2 |
+| `-anillo-0157` (05-11) | 0.1.57 | 82,2 | **2.322,6** | 3.098,8 | anillo por defecto de 0.1.57 (256/192/96) → **4K +10,7 %**, **adoptado**; 32K: 3.055,5 |
 
 Lecturas:
 
