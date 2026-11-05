@@ -9,7 +9,8 @@
   0.1.52 (v0.2.7), 0.1.54 (v0.2.8), 0.1.55 (v0.2.9) y, desde el 03-11/05-11, **0.1.56 y
   0.1.57 (los de producción hoy)**, todos
   `linux-x86_64-hip-rx9070` con sha256 verificado contra el `SHA256SUMS.txt` de su release
-  (0.1.55: `88a19b89…4a77`). La documentación del clon está sincronizada con **v0.2.9**.
+  (0.1.55: `88a19b89…4a77`). La documentación del clon está sincronizada con **v0.2.11**
+  (la de los motores 0.1.56/0.1.57), con el endurecimiento local reaplicado.
 - **Wheels GPU (ROCm/TheRock)**: la release empaqueta `7.10.0a20251120` (`gfx120X-all`);
   producción corre sobre un **runtime ROCm propio 10.3.0a20261030 con hipBLASLt 1.5.0**
   (wheels `nightly.repo.amd.com`, instalados aparte y apuntados con `lib_dirs`, sin

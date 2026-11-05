@@ -66,7 +66,7 @@ Motor **0.1.57** oficial con `STRATA_GDN_CHUNKED=1`, `STRATA_EXPDEC=0` y `STRATA
 y drafter **DFlash2** (`--draft dflash2`, pack `q4_0` dedicado), sobre **ROCm 10.3 propio**
 (hipBLASLt 1.5.0, tabla de 168 filas regenerada aquí). Modelos **IQ3_XXS** e **IQ3_S** (se alternan),
 contexto 131.072. El proyecto Strata sigue sobre el clon v0.1.45 con el endurecimiento propio;
-la documentación del clon es espejo de v0.2.9.
+la documentación del clon es espejo de v0.2.11 con el endurecimiento local reaplicado.
 
 ## Aviso
 
