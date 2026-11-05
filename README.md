@@ -26,6 +26,14 @@ de entonces, A/B formal pendiente; ver [PASOS.md](PASOS.md)):
 | Relectura de 32.000 tokens | ~3.055 tokens/s (primer token en ~10,5 s) |
 | Contexto máximo | 131.072 tokens |
 
+Sobre esas cifras: las filas de prefill son las medias de la corrida auditada del 05-11
+(`-anillo-0157`, en benches/muestras/). El "~94 tokens/s" de chat es una estimación
+típica del uso diario: la mediana auditada de la misma corrida es 82,2 con rango
+74,7-125,3, y el uso real con borradores aceptados cae en la parte alta. Los porcentajes
+de DFlash2 (+12 %/+13 %) y del anillo (+11 %/+14 %) son estimaciones previas al A/B; las
+ganancias auditadas de esos A/B son **+5,5 % de chat (mediana)** y **+10,7 % en 4K**, con
+sus tablas en [RESULTADOS.md](RESULTADOS.md).
+
 Las tres ganancias grandes medidas aquí vienen de upstream y están cada una en su fecha:
 la ruta **GDN chunked con tensor cores en gfx12** (motor 0.1.55: +6 % en 4K y +6 % en 16K),
 el **drafter DFlash2** en lugar del cabezal predictor (motor 0.1.56: **+12 %/+13 % en chat**,
