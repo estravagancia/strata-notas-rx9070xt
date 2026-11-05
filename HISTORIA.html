@@ -167,19 +167,24 @@ de carga continua con varios usuarios a la vez, cientos de peticiones, cero fall
 </div>
 
 <div class="event">
-<span class="fecha">3 de noviembre · La mayor ganancia: +12–13&nbsp;% escribiendo</span> <span class="note">engine 0.1.56 oficial + drafter DFlash2</span><br>
+<span class="fecha">3 de noviembre · La ganancia del caso más usado: +5,5&nbsp;% escribiendo</span> <span class="note">engine 0.1.56 oficial + drafter DFlash2</span><br>
 El truco del oficio: para escribir más rápido, el modelo <em>predice las siguientes palabras y las
 verifica en bloque</em> en vez de escribirla una a una. Se sustituye el sistema de predicción
-antiguo por uno nuevo, más listo y comprimido, afinado para español. Medido en dos tandas
-independientes: <span class="res">+12&nbsp;% y +13&nbsp;% en conversación</span>, sin tocar los textos
-largos. Es la mayor ganancia individual de todo el proyecto.
+antiguo por uno nuevo, más listo y comprimido (viene cuantizado en cuartos), afinado para español.
+Medido contra el sistema antiguo el mismo día: <span class="res">+5,5&nbsp;% en la velocidad típica
+de conversación</span>, y en los tramos favorables el techo sube de ~98 a ~125 tokens/s; la
+contrapartida es más variación entre respuestas. Los textos largos no se mueven. No es la mejora
+porcentual más grande del proyecto (las de relectura lo fueron más), pero es la que se nota en el
+uso de cada día.
 </div>
 
 <div class="event">
-<span class="fecha">5 de noviembre · La última del mes: +11–14&nbsp;% preparando textos</span> <span class="note">engine 0.1.57 oficial, anillo de preparación más profundo</span><br>
-Última versión del motor (0.1.57), otra vez medida contra la anterior en seis pruebas con dos repeticiones:
-<span class="res">+11–14&nbsp;% en la relectura de textos de 4.000 tokens</span> gracias a un sistema
-nuevo de preparación de los documentos. Y otra vez, la marcha atrás preparada por si acaso.
+<span class="fecha">5 de noviembre · La última por ahora: +10,7&nbsp;% preparando textos</span> <span class="note">engine 0.1.57 oficial, anillo de preparación más profundo</span><br>
+Última versión del motor (0.1.57), otra vez medida contra la anterior el mismo día:
+<span class="res">+10,7&nbsp;% en la relectura de textos de 4.000 tokens</span> (y se pasa de tardar
+1,9 s a 1,75 s en empezar a responder) gracias a un anillo más profundo que prepara los documentos
+por adelantado. En textos de 16.000 y 32.000 tokens no aporta nada: ahí el cuello de botella es otro.
+La marcha atrás preparada, por si acaso, sigue siendo una sola variable.
 </div>
 
 </div>
@@ -188,20 +193,21 @@ nuevo de preparación de los documentos. Y otra vez, la marcha atrás preparada 
 
 <p>Estos son los números publicados por esta misma caja al cerrar el proyecto (5 de noviembre de 2026).
 Para quien no conozca la unidad: un token es aproximadamente media palabra en español;
-94 tokens por segundo son unas 45 palabras por segundo, más rápido que la mayoría de nosotros tecleamos.</p>
+82–94 tokens por segundo vienen a ser 40–45 palabras por segundo, más rápido que la mayoría de nosotros tecleamos.</p>
 
 <table>
 <tr><th>Qué hace</th><th>Antes (23 de octubre)</th><th>Ahora (5 de noviembre)</th></tr>
-<tr><td>Escribir una conversación normal</td><td>~71 tokens/s</td><td><strong>~94 tokens/s</strong> <span class="note">(+33&nbsp;% aproximado*)</span></td></tr>
+<tr><td>Escribir una conversación normal</td><td>~71 tokens/s</td><td><strong>82 tokens/s</strong> <span class="note">mediana medida en frío; el uso diario típico ronda ~94 y los mejores tramos llegan a ~125*</span></td></tr>
 <tr><td>Releer y entender un texto de 4.000 tokens</td><td>~1.980 tokens/s</td><td><strong>~2.320 tokens/s</strong> (responde en menos de 2 s)</td></tr>
 <tr><td>Releer un texto de 16.000 tokens</td><td>~2.430 tokens/s</td><td><strong>~3.100 tokens/s</strong></td></tr>
+<tr><td>Releer un texto de 32.000 tokens</td><td>— (no se medía)</td><td><strong>~3.055 tokens/s</strong> (responde en ~10 s)</td></tr>
 <tr><td>Memoria de conversación</td><td>98.000 tokens</td><td><strong>131.000 tokens</strong> (un libro entero)</td></tr>
 </table>
 <p class="note">* La comparación directa de los dos extremos tiene trampa: en medio cambió la configuración
 y el protocolo de medida. Cada escalón intermedio sí está medido contra su inmediato anterior;
 el total es una orientación, no una medida. Lo medido en frío y con control: +2&nbsp;% (27 oct, engine 0.1.52
-con un interruptor apagado), +3,5&nbsp;% (30 oct, runtime ROCm 10.3), +6&nbsp;% (31 oct, engine 0.1.55),
-+12–13&nbsp;% (3 nov, engine 0.1.56 con DFlash2), +11–14&nbsp;% (5 nov, engine 0.1.57).</p>
+con un interruptor apagado), +3,5&nbsp;% (30 oct, runtime ROCm 10.3), +6&nbsp;% releyendo (31 oct, engine 0.1.55),
++5,5&nbsp;% escribiendo (3 nov, engine 0.1.56 con DFlash2), +10,7&nbsp;% releyendo 4.000 tokens (5 nov, engine 0.1.57).</p>
 
 <p>Además de la velocidad, hay dos logros silenciosos que valen tanto como los números:</p>
 <ul>
