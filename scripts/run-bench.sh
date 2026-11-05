@@ -18,16 +18,22 @@
 #   --extra  args del engine que se AÑADEN a los del config; si un flag ya estaba, su valor
 #            base se elimina primero (solo flags de un valor: --pcie-frac, --spec, --spec-min-p…)
 #   --config bench desde otro config (por defecto: strata-iq3_xxs.json)
+#   (env) PORT        puerto del bench, por defecto 8094; NUNCA el 8081 de producción
+#   (env) BENCH_EXTRA args extra para strata_bench.py (p. ej. --long = prompt de ~32K)
 #
 # Ejemplos (protocolo del 2026-10-23):
 #   bench/run-bench.sh anclaje
 #   bench/run-bench.sh det035 --det
 #   bench/run-bench.sh det060 --det --extra "--pcie-frac 0.6"
 
-ROOT=/home/estravagancia/Strata
+ROOT=/home/TU-USUARIO/Strata
 PY=$ROOT/.venv/bin/python
-HEALTH=http://192.168.0.35:8081/health
-URL=http://192.168.0.35:8081
+# Puerto del bench: 8094 por defecto, NUNCA el 8081 de producción (2026-11-05).
+# El runner no toca 8081 en absoluto: comprueba que SU puerto esté libre.
+PORT=${PORT:-8094}
+BENCH_EXTRA=${BENCH_EXTRA:-}   # p. ej. "--long" para el prompt de ~32K tokens
+HEALTH=http://127.0.0.1:$PORT/health
+URL=http://127.0.0.1:$PORT
 
 LABEL=$1; [ -n "$LABEL" ] || { echo "uso: $0 LABEL [--det] [--extra ARGS] [--config JSON]" >&2; exit 64; }
 shift
@@ -42,7 +48,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# ¿sigue vivo el servidor de producción? (fallar rápido: debe pararse antes)
+# ¿está libre el puerto del bench? (no se consulta el 8081 de producción)
 if $PY - "$HEALTH" <<'PYEOF'
 import sys, urllib.request
 try:
@@ -51,7 +57,7 @@ except Exception:
     sys.exit(1)
 PYEOF
 then
-  echo "responde algo en 8081: para el servidor de producción antes del bench" >&2
+  echo "responde algo en $PORT: el puerto del bench debe estar libre (PORT=$PORT)" >&2
   exit 1
 fi
 
@@ -88,6 +94,7 @@ except Exception:
     build = "(sin BUILD.json)"
 m = ["cold bench %s  %s" % (os.path.basename(rundir), time.strftime("%F %T")),
      "clone HEAD: " + head, "engine: " + exe, "BUILD.json: " + build,
+     "puerto bench: " + os.environ.get("PORT", "8094") + " (produccion 8081 intacto)",
      "config base: %s  sha256:%s" % (cfg_path, sha(cfg_path)),
      "config bench: sha256:%s" % sha(bench_cfg),
      "args en el bench:", *["  " + a for a in cfg["args"]],
@@ -99,10 +106,10 @@ open(os.path.join(rundir, "meta.txt"), "w").write("\n".join(m) + "\n")
 PYEOF
 
 cd "$ROOT" || exit 1
-$PY serve/server.py --engine strata --config "$RUNDIR/strata-bench.json" --port 8081 \
+$PY serve/server.py --engine strata --config "$RUNDIR/strata-bench.json" --port "$PORT" \
   > "$RUNDIR/serve-stdout.log" 2>&1 &
 SRV=$!
-echo "servidor arrancando (pid $SRV); esperando a que 8081 responda..."
+echo "servidor arrancando (pid $SRV) en $PORT; esperando a que $PORT responda..."
 READY=0; i=0
 while [ $i -lt 60 ]; do
   sleep 10
@@ -130,7 +137,7 @@ sleep 20   # margen para el primer warm-up del engine
 RC=0
 for n in 1 2; do
   echo "== bench corrida $n / 2 =="
-  $PY tools/strata_bench.py --url "$URL" --out "$RUNDIR/run$n" > "$RUNDIR/bench-run$n.log" 2>&1
+  $PY tools/strata_bench.py --url "$URL" $BENCH_EXTRA --out "$RUNDIR/run$n" > "$RUNDIR/bench-run$n.log" 2>&1
   RC=$?
   tail -n 15 "$RUNDIR/bench-run$n.log"
   [ $RC = 0 ] || break

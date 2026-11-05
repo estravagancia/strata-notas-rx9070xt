@@ -12,20 +12,23 @@ los produjo. Donde no hay medida, lo decimos.
 ## Qué consiguió esta caja
 
 Con el modelo **Qwen3.8-Flash-Next IQ3_XXS** (75,8 GB en disco, 16 GiB de VRAM y 60 GB de RAM)
-y el motor **0.1.55** sobre un runtime **ROCm 10.3 propio** (ver más abajo):
+y el motor **0.1.57** sobre un runtime **ROCm 10.3 propio** (ver más abajo):
 
 | Métrica | Valor |
 |---|---|
-| Escritura tipo chat (dominio común) | ~81 tokens/s de salida |
-| Relectura de un texto de 4.000 tokens | **~2.035 tokens/s** (empieza a responder en ~2 s) |
-| Relectura de 16.000 tokens | **~2.970 tokens/s** (primer token en ~5,4 s) |
+| Escritura tipo chat (dominio común) | **~94 tokens/s** de salida |
+| Relectura de un texto de 4.000 tokens | **~2.320 tokens/s** (empieza a responder en ~1,75 s) |
+| Relectura de 16.000 tokens | **~3.100 tokens/s** (primer token en ~5,2 s) |
+| Relectura de 32.000 tokens | ~3.055 tokens/s (primer token en ~10,5 s) |
 | Contexto máximo | 131.072 tokens |
 
-La última ganancia grande es de upstream: el motor 0.1.55 (lanzamiento v0.2.9) trae la
-ruta **GDN chunked con tensor cores en gfx12**, que aquí dio **+6 % en 4K y +6 % en 16K**
-medido en frío (ver [RESULTADOS.md](RESULTADOS.md)). Y una segunda, menos obvia: el motor
-oficial corre **sin recompilar** sobre wheels de ROCm más nuevos que los que empaqueta la
-release (ver [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md)).
+Las tres ganancias grandes medidas aquí vienen de upstream y están cada una en su fecha:
+la ruta **GDN chunked con tensor cores en gfx12** (motor 0.1.55: +6 % en 4K y +6 % en 16K),
+el **drafter DFlash2** en lugar del cabezal predictor (motor 0.1.56: **+12 %/+13 % en chat**,
+con el borrador ya en cuartos), y el **anillo de preparación de prompt más profundo**
+(motor 0.1.57: **+11 %/+14 % en 4K**). Y una cuarta, menos obvia: el motor oficial corre
+**sin recompilar** sobre wheels de ROCm más nuevos que los que empaqueta la release. Todo,
+en frío y con su tabla en [RESULTADOS.md](RESULTADOS.md) y [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md).
 
 Lo interesante no es la cifra, sino **por qué** se llegó a ella y qué experimentos
 quedaron por el camino: hay una lista de cosas que mejoraron de verdad y una lista, más
