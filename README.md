@@ -11,8 +11,12 @@ los produjo. Donde no hay medida, lo decimos.
 
 ## Qué consiguió esta caja
 
-Con el modelo **Qwen3.8-Flash-Next IQ3_XXS** (75,8 GB en disco, 16 GiB de VRAM y 60 GB de RAM)
-y el motor **0.1.57** sobre un runtime **ROCm 10.3 propio** (ver más abajo):
+Esta caja usa en producción, de forma indistinta, **Qwen3.8-Flash-Next** en **IQ3_XXS**
+(75,8 GB en disco) y en **IQ3_S** (83,6 GB); las dos configs están en [configs/](configs/).
+Los números siguientes están medidos con **IQ3_XXS** (16 GiB de VRAM y ~60 GB de RAM)
+y el motor **0.1.57** sobre un runtime **ROCm 10.3 propio** (ver más abajo). Para **IQ3_S**
+no hay benches auditados: la única medida es informal (26-10, ~+17 % en 16K con la config
+de entonces, A/B formal pendiente; ver [PASOS.md](PASOS.md)):
 
 | Métrica | Valor |
 |---|---|

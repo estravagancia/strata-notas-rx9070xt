@@ -99,9 +99,13 @@ Lecturas:
 - `0155-off` cae dentro de la banda del control `-rocm103-100500` (−1,7 % de chat como
   peor caso): el motor nuevo no aporta ni cuesta por sí solo; lo que aporta es GDN.
 
-## Producción actual (31-10, IQ3_XXS, contexto 131.072)
+## Medida de producción actual (31-10, con IQ3_XXS, contexto 131.072)
 
 Motor **0.1.55** + `STRATA_GDN_CHUNKED=1` + `STRATA_EXPDEC=0` sobre ROCm 10.3 propio:
 chat **80,5-81,7** tok/s, prefill **2.025-2.051** (4K) y **2.966-2.977** (16K), primer
 token **1,98-2,01 s / 5,42-5,46 s**. Medida puntual del servidor real (no del bench) el
 mismo día: respuesta completa en ~1,2 s para un prompt corto.
+
+Nota: la producción alterna **IQ3_XXS** e **IQ3_S**. Todas las medidas de este archivo
+corresponden a IQ3_XXS; no hay bench auditado de IQ3_S (solo la medida informal del 26-10,
+ver [PASOS.md](PASOS.md)).

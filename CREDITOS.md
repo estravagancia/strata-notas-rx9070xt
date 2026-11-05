@@ -16,8 +16,8 @@
   con el afinador de Strata (168 filas). Ver [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md).
   Sin ROCm en el sistema.
 - **llama.cpp**: fijado en `3cf03257` (el pin del repositorio Strata de aquella rama).
-- **Modelo**: Qwen3.8-Flash-Next en cuantizaciones **IQ3_XXS** (producción hoy) e IQ3_S
-  (etapa anterior), packs `…-GSQ-RCO-…` descargados por el propio setup de Strata.
+- **Modelo**: Qwen3.8-Flash-Next en cuantizaciones **IQ3_XXS** e **IQ3_S**, ambas en
+  producción de forma indistinta; packs `…-GSQ-RCO-…` descargados por el propio setup de Strata.
   Vector de control de negación: `Huihui-Qwen3.8-Flash-Next-refusal-direction-r.gguf`.
 - **Herramienta de bench**: `tools/strata_bench.py` del propio Strata; el protocolo en
   frío y el script son propios (documentados aquí).
