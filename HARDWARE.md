@@ -4,9 +4,14 @@
 |---|---|
 | Gráfica | AMD Radeon **RX 9070 XT**, 16 GiB de VRAM (RDNA 4) |
 | CPU | AMD Ryzen 7 **9800X3D** (8 núcleos / 16 hilos, Zen 5, con AVX-512) |
-| RAM | **60 GB** DDR5 |
+| Placa base | ASUS **PRIME X870-P WIFI** (BIOS 1644, 03/2026) |
+| RAM | **64 GB** DDR5 — Corsair Vengeance RGB, 6400 MHz, 2×32 GB (dual channel) |
 | Sistema | Ubuntu Linux, kernel 7.0.0-38 (x86_64) |
 | Driver | amdgpu (sin ROCm del sistema; ver más abajo) |
+
+Nota: donde otras notas hablan de "60 GB de RAM" se refieren a lo que el modelo llega a
+ocupar en esta caja, no a la capacidad instalada (64 GB nominales; `MemTotal` reporta
+61,2-61,4 GiB utilizables).
 
 ## La rareza: la tarjeta se reporta como "gfx1200", no "gfx1201"
 
