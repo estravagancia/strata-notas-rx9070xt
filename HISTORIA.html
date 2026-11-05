@@ -100,7 +100,7 @@ cuya causa nadie sabría señalar.</p>
 <div class="timeline">
 
 <div class="event">
-<span class="fecha">20–21 de octubre · Los cimientos</span><br>
+<span class="fecha">20–21 de octubre · Los cimientos</span> <span class="note">engine 0.1.46</span><br>
 Primeras versiones del motor probadas y medidas. Nace el "banco de pruebas": un protocolo para
 repetir siempre la misma tanda de pruebas (una conversación normal, un texto de 4.000 tokens,
 otro de 16.000, una tarea de agente) y un panel local donde queda guardada la historia de todas
@@ -108,23 +108,14 @@ las mediciones, versión a versión. Ese panel es hoy la memoria del proyecto.
 </div>
 
 <div class="event">
-<span class="fecha">23 de octubre · El banco de pruebas se pone serio</span><br>
+<span class="fecha">23–25 de octubre · El banco de pruebas se pone serio</span> <span class="note">engine 0.1.48, compilado en casa → 0.1.48.1 → 0.1.50 oficial</span><br>
 Se compila una versión del motor a medida de esta tarjeta y se adopta tras medirla.
+Días después llegan las primeras versiones oficiales preparadas para esta tarjeta: se miden,
+resultan neutras (ni mejor ni peor), y se adoptan igualmente por mantenerse al día sin pagar peaje.
 Ese mismo día se detecta que el protocolo de medida tenía un agujero (equipos "calientes" frente
 a "fríos" dan resultados distintos) y se corrige: a partir de ahí, todas las comparaciones se hacen
 en frío, con el equipo recién arrancado. También se prueba a ampliar la memoria de conversación
 y se mide que no compensa: se queda la que había. <span class="res">Cada descarte queda documentado.</span>
-</div>
-
-<div class="event">
-<span class="fecha">24–25 de octubre · Detectives de una caída invisible</span><br>
-Una actualización nueva llegaba con cambios de fábrica en cuatro ajustes de la tarjeta gráfica.
-Al medir, la conversación normal caía un 9&nbsp;%: los cuatro juntos. Se desmontó el misterio con
-cuatro pruebas de aislamiento: ninguno era el culpable por sí solo, pero al apagar
-<strong>uno solo de los cuatro interruptores</strong> la máquina no solo recuperaba lo perdido:
-quedaba un <span class="res">2&nbsp;% más rápida que antes</span>. Se adopta el motor nuevo con ese
-interruptor apagado. La lección vale oro: una mejora entera escondida dentro de una actualización
-que, tal cual, iba a peor.
 </div>
 
 <div class="event">
@@ -137,8 +128,19 @@ También se construyó un ajuste del motor en español: como el modelo predice p
 acotar su vocabulario a nuestro idioma lo afina.
 </div>
 
+<div class="event">
+<span class="fecha">27 de octubre (tarde-noche) · Detectives de una caída invisible</span> <span class="note">engine 0.1.52: descartado por medidas → adoptado horas después con un interruptor apagado</span><br>
+Una actualización nueva llegaba con cambios de fábrica en cuatro ajustes de la tarjeta gráfica.
+Al medir, la conversación normal caía un 9&nbsp;%: los cuatro juntos. Se desmontó el misterio con
+cuatro pruebas de aislamiento: ninguno era el culpable por sí solo, pero al apagar
+<strong>uno solo de los cuatro interruptores</strong> la máquina no solo recuperaba lo perdido:
+quedaba un <span class="res">2&nbsp;% más rápida que antes</span>. Se adopta el motor nuevo con ese
+interruptor apagado. La lección vale oro: una mejora entera escondida dentro de una actualización
+que, tal cual, iba a peor.
+</div>
+
 <div class="event warn">
-<span class="fecha">29 de octubre · El experimento que salió mal (y se deshizo en horas)</span><br>
+<span class="fecha">29 de octubre · El experimento que salió mal (y se deshizo en horas)</span> <span class="note">sobre engine 0.1.52</span><br>
 Se probó a forzar la máquina: más memoria de conversación, más reserves, más todo.
 Resultado medido ese mismo día: <span class="res bad">un 28&nbsp;% más lento</span> en la conversación
 diaria. En lugar de discutir por qué, se revirtió a la configuración de la mañana y se escribió
@@ -148,15 +150,15 @@ a la carga es lo que hundía el rendimiento. Más vale lo conocido...)</span>
 </div>
 
 <div class="event">
-<span class="fecha">30 de octubre · Dos mejoras seguidas, ambas medidas</span><br>
-Primera: una versión nueva del motor se adopta por cumplir el criterio estricto de "no empeora nada".
+<span class="fecha">30 de octubre · Dos mejoras seguidas, ambas medidas</span> <span class="note">engine 0.1.54 oficial + runtime ROCm 10.3 propio</span><br>
+Primera: la versión 0.1.54 del motor se adopta por cumplir el criterio estricto de "no empeora nada".
 Segunda, más surprising: se sustituye la librería de drivers de la tarjeta gráfica por una versión
 más moderna, <strong>sin recompilar nada</strong>. Medida: <span class="res">+3,5&nbsp;% en conversación</span>.
 La forma en que se actualiza un componente sin tocar el resto merece un artículo aparte.
 </div>
 
 <div class="event">
-<span class="fecha">31 de octubre · Textos largos: +6&nbsp;% de golpe</span><br>
+<span class="fecha">31 de octubre · Textos largos: +6&nbsp;% de golpe</span> <span class="note">engine 0.1.55 oficial, ruta GDN chunked</span><br>
 Una ruta nueva del motor para procesar documentos largos aprovecha mejor la tarjeta.
 Cuatro pruebas independientes, las cuatro por encima del umbral que nos fijamos:
 <span class="res">+6&nbsp;% releer textos de 4.000 y 16.000 tokens</span>, y la máquina tarda
@@ -165,7 +167,7 @@ de carga continua con varios usuarios a la vez, cientos de peticiones, cero fall
 </div>
 
 <div class="event">
-<span class="fecha">3 de noviembre · La mayor ganancia: +12–13&nbsp;% escribiendo</span><br>
+<span class="fecha">3 de noviembre · La mayor ganancia: +12–13&nbsp;% escribiendo</span> <span class="note">engine 0.1.56 oficial + drafter DFlash2</span><br>
 El truco del oficio: para escribir más rápido, el modelo <em>predice las siguientes palabras y las
 verifica en bloque</em> en vez de escribirla una a una. Se sustituye el sistema de predicción
 antiguo por uno nuevo, más listo y comprimido, afinado para español. Medido en dos tandas
@@ -174,8 +176,8 @@ largos. Es la mayor ganancia individual de todo el proyecto.
 </div>
 
 <div class="event">
-<span class="fecha">5 de noviembre · La última del mes: +11–14&nbsp;% preparando textos</span><br>
-Última versión del motor, otra vez medida contra la anterior en seis pruebas con dos repeticiones:
+<span class="fecha">5 de noviembre · La última del mes: +11–14&nbsp;% preparando textos</span> <span class="note">engine 0.1.57 oficial, anillo de preparación más profundo</span><br>
+Última versión del motor (0.1.57), otra vez medida contra la anterior en seis pruebas con dos repeticiones:
 <span class="res">+11–14&nbsp;% en la relectura de textos de 4.000 tokens</span> gracias a un sistema
 nuevo de preparación de los documentos. Y otra vez, la marcha atrás preparada por si acaso.
 </div>
@@ -197,8 +199,9 @@ Para quien no conozca la unidad: un token es aproximadamente media palabra en es
 </table>
 <p class="note">* La comparación directa de los dos extremos tiene trampa: en medio cambió la configuración
 y el protocolo de medida. Cada escalón intermedio sí está medido contra su inmediato anterior;
-el total es una orientación, no una medida. Lo medido en frío y con control: +2&nbsp;% (25 oct),
-+3,5&nbsp;% (30 oct), +6&nbsp;% (31 oct), +12–13&nbsp;% (3 nov), +11–14&nbsp;% (5 nov).</p>
+el total es una orientación, no una medida. Lo medido en frío y con control: +2&nbsp;% (27 oct, engine 0.1.52
+con un interruptor apagado), +3,5&nbsp;% (30 oct, runtime ROCm 10.3), +6&nbsp;% (31 oct, engine 0.1.55),
++12–13&nbsp;% (3 nov, engine 0.1.56 con DFlash2), +11–14&nbsp;% (5 nov, engine 0.1.57).</p>
 
 <p>Además de la velocidad, hay dos logros silenciosos que valen tanto como los números:</p>
 <ul>
