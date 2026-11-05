@@ -1,6 +1,6 @@
 # Muestras de bench (para auditar las tablas)
 
-Cinco corridas auditadas, en el formato `results.json` "schema 1" de
+Nueve corridas auditadas, en el formato `results.json` "schema 1" de
 `tools/strata_bench.py`: cada una contiene 3 pasadas por métrica, la máquina
 (GPU/CPU/RAM/OS), la versión del motor y los detalles del arranque (ranuras de
 expertos, `pcie_frac`, cachés…).
@@ -12,10 +12,15 @@ expertos, `pcie_frac`, cachés…).
 | `iqgather-0.1.50-flag/` | `-iqgather` (25-10) | 0.1.50 + `STRATA_IQ_GATHER=1` (descartado) |
 | `off-0.1.55-control/` | `-0155-off-b` (31-10) | 0.1.55 + ROCm 10.3, GDN **apagado** (control del A/B) |
 | `gdn-0.1.55-gdn/` | `-0155-gdn-b` (31-10) | 0.1.55 + ROCm 10.3 + **`STRATA_GDN_CHUNKED=1`** (adoptado) |
+| `mtp-0.1.56-control/` | `-mtp-0156-control` (03-11) | 0.1.56 con cabezal MTP (control del A/B del drafter) |
+| `df2-0.1.56-draft/` | `-df2-0156-draft` (03-11) | 0.1.56 + **`--draft dflash2`** (adoptado) |
+| `engine-0.1.57-ring0/` | `-ring0-0157` (05-11) | 0.1.57, anillo de preparación de prompt en 0 (control; usa `--long`, añade 32K) |
+| `engine-0.1.57-anillo/` | `-anillo-0157` (05-11) | 0.1.57 con el anillo más profundo (adoptado; usa `--long`) |
 
-Las dos últimas son el A/B del 31-10 con el contexto en 131.072 y el runtime ROCm propio:
-mismo día, misma config, una sola variable (`STRATA_GDN_CHUNKED`). Comparar esas dos sí;
-compararlas con las tres primeras arrastra el cambio de contexto y de runtime.
+Hay tres A/B publicados por parejas: el del 31-10 (GDN chunked), el del 03-11 (DFlash2
+frente al cabezal MTP) y el del 05-11 (anillo de prompt). Comparar solo dentro de la
+misma pareja: arrastran cambios de contexto, runtime o protocolo (las dos del 05-11
+usan `strata_bench.py --long` e incluyen el prompt de 32K; las anteriores no).
 
 Qué mirar si quieres repetir el experimento: `machine.engine_version`, `context` y
 `expert_slots` (deben coincidir con la corrida que quieras comparar), y el bloque de

@@ -99,13 +99,42 @@ Lecturas:
 - `0155-off` cae dentro de la banda del control `-rocm103-100500` (−1,7 % de chat como
   peor caso): el motor nuevo no aporta ni cuesta por sí solo; lo que aporta es GDN.
 
-## Medida de producción actual (31-10, con IQ3_XXS, contexto 131.072)
+## Serie 03-11 → 05-11 (0.1.56: drafter DFlash2; 0.1.57: anillo de prompt)
 
-Motor **0.1.55** + `STRATA_GDN_CHUNKED=1` + `STRATA_EXPDEC=0` sobre ROCm 10.3 propio:
-chat **80,5-81,7** tok/s, prefill **2.025-2.051** (4K) y **2.966-2.977** (16K), primer
-token **1,98-2,01 s / 5,42-5,46 s**. Medida puntual del servidor real (no del bench) el
-mismo día: respuesta completa en ~1,2 s para un prompt corto.
+El 03-11, A/B en el mismo día del drafter **DFlash2** (pack `q4_0` dedicado,
+`--draft-fallback none`, `--draft-conf 0.7`) contra el cabezal MTP de siempre. El 05-11,
+con el motor **0.1.57** instalado, A/B del **anillo de preparación de prompt más
+profundo** (control: anillo en 0). Las corridas del 05-11 usan `strata_bench.py --long`,
+que añade el prompt de 32K; las anteriores no son comparables en esa métrica. Muestras
+completas en [benches/muestras/](benches/muestras/).
+
+| Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+|---|---|---|---|---|---|
+| `-mtp-0156-control` (03-11) | 0.1.56 | 77,0 | 2.046,1 | 3.041,5 | cabezal MTP (control del A/B) |
+| `-df2-0156-draft` (03-11) | 0.1.56 | **81,2** | 2.040,8 | 3.071,4 | `--draft dflash2` → **+5,5 % chat (mediana)**, 4K/16K planos, **adoptado** |
+| `-ring0-0157` (05-11) | 0.1.57 | 79,3 | 2.098,0 | 3.099,6 | anillo en 0 (control); 32K: 3.067,2 |
+| `-anillo-0157` (05-11) | 0.1.57 | 82,2 | **2.322,6** | 3.098,8 | anillo más profundo → **4K +10,7 %**, **adoptado**; 32K: 3.055,5 |
+
+Lecturas:
+
+- **DFlash2** sube la mediana de chat un +5,5 % pero con rangos anchos (69,4-126,2
+  frente a 71,2-97,7 del control): la ganancia existe, y la varianza del
+  borrador también. 4K y 16K quedan planos.
+- El **anillo profundo** solo se nota en 4K (+10,7 %); en 16K y 32K queda dentro del
+  ruido (±0,2 %). El primer token de 4K baja de 1,94 a 1,75 s; el de 32K se queda en
+  ~10,5 s.
+
+## Medida de producción actual (05-11, con IQ3_XXS, contexto 131.072)
+
+Motor **0.1.57** + `STRATA_GDN_CHUNKED=1` + `STRATA_EXPDEC=0` + drafter **DFlash2** sobre
+ROCm 10.3 propio (medias de `-anillo-0157`, con `--long`): chat **82,2** tok/s (rango
+74,7-125,3), prefill **2.322,6** (4K), **3.098,8** (16K) y **3.055,5** (32K), primer
+token **1,75 s / 5,21 s / 10,52 s**.
 
 Nota: la producción alterna **IQ3_XXS** e **IQ3_S**. Todas las medidas de este archivo
 corresponden a IQ3_XXS; no hay bench auditado de IQ3_S (solo la medida informal del 26-10,
 ver [PASOS.md](PASOS.md)).
+
+El estado anterior (31-10, motor 0.1.55): chat 80,5-81,7, prefill 2.025-2.051 (4K) y
+2.966-2.977 (16K), primer token 1,98-2,01 s / 5,42-5,46 s; medida puntual del servidor
+real (no del bench) aquel día: respuesta completa en ~1,2 s para un prompt corto.

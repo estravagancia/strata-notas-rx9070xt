@@ -103,3 +103,44 @@ tarjeta. En nuestro servidor los requests se encolan, así que antes de adoptarl
 un *soak* de 3 clientes concurrentes (12 requests) y 10 minutos de carga continua
 (872 requests, 0 fallos, primer token mediano 2,0 s). Si algún día se usa `parallel` > 1
 a nivel de motor, revisar esto primero.
+
+## 8. Drafter DFlash2 en lugar del cabezal MTP (motor 0.1.56, `--draft dflash2`)
+
+**Qué:** desde el 0.1.56 el borrador para la decodificación especulativa puede ser un
+modelo DFlash2 con pack propio (`qwen3.8-flash-next-dflash2.q4_0.pack`, ya cuantizado en
+cuartos) en lugar del cabezal MTP entrenado junto al modelo. Config: `--draft dflash2`,
+`--draft-model <pack>`, `--draft-fallback none`, `--draft-conf 0.7`.
+
+**Cuánto (A/B en frío, 03-11, IQ3_XXS, contexto 131.072, medias de 9 requests en chat y
+3 en prefill):**
+
+| Métrica | Control MTP | DFlash2 | Diferencia |
+|---|---|---|---|
+| chat tok/s | 77,0 (71,2-97,7) | **81,2** (69,4-126,2) | **+5,5 %** en la mediana |
+| 4K tok/s | 2.046,1 | 2.040,8 | plano |
+| 16K tok/s | 3.041,5 | 3.071,4 | plano |
+
+**Lo que hay que saber:** la ganancia es de mediana, no de peor caso: el rango del
+drafter es mucho más ancho (69,4-126,2). En el dominio favorable el techo sube de ~98 a
+~126 tok/s; en el desfavorable puede bajar del control. Aun así se adoptó por el
+balance. Con `--draft-fallback none` no hay vuelta al MTP en caliente: el rollback es
+quitar el `--draft` de la config.
+
+## 9. Anillo de preparación de prompt más profundo (motor 0.1.57)
+
+**Qué:** el 0.1.57 profundiza el anillo que prepara la lectura del prompt por adelantado
+(más trabajo de prefill encadenado mientras se atiende la petición en curso).
+
+**Cuánto (A/B en frío, 05-11, IQ3_XXS, contexto 131.072, `--long`):**
+
+| Métrica | Anillo 0 (control) | Anillo profundo | Diferencia |
+|---|---|---|---|
+| 4K tok/s | 2.098,0 | **2.322,6** | **+10,7 %** |
+| 16K tok/s | 3.099,6 | 3.098,8 | dentro del ruido |
+| 32K tok/s | 3.067,2 | 3.055,5 | dentro del ruido |
+| primer token 4K | 1,94 s | **1,75 s** | −10 % |
+| chat tok/s | 79,3 (76,3-126,9) | 82,2 (74,7-125,3) | dentro del rango |
+
+**Lo que hay que saber:** la ganancia se concentra en los 4K; a 16K y 32K el cuello ya
+es otro (PCIe/swap de expertos) y el anillo no lo mueve. Es la mayor ganancia de prefill
+desde GDN y viene de serie en el motor: no hay bandera que activar.

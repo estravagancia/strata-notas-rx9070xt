@@ -49,16 +49,16 @@ larga y más útil, de cosas que se midieron y **no** mejoraron nada.
 5. [patches/](patches/) — los 2 parches que preparamos para Strata (aún no enviados),
    el endurecimiento de seguridad del servidor y un ajuste de vocabulario en español.
 6. [configs/](configs/) y [scripts/](scripts/) — la configuración real y el script de medidas.
-7. [benches/muestras/](benches/muestras/) — 5 mediciones completas para que audites las tablas.
+7. [benches/muestras/](benches/muestras/) — 9 mediciones completas para que audites las tablas.
 8. [CREDITOS.md](CREDITOS.md) — de dónde viene cada pieza.
 
-## Estado actual (31-10-2026)
+## Estado actual (05-11-2026)
 
-Motor **0.1.55** oficial (lanzamiento v0.2.9) con `STRATA_GDN_CHUNKED=1`, `STRATA_EXPDEC=0`
-y `STRATA_PLE_AUTO_RAM=0`, sobre **ROCm 10.3 propio** (hipBLASLt 1.5.0, tabla de 168 filas
-regenerada aquí) y modelo **IQ3_XXS**, contexto 131.072. Servidor Python al día con v0.2.9
-(tres correcciones de comportamiento respecto a v0.2.8). La documentación del clon es
-espejo de v0.2.9 más dos bloques de endurecimiento propio.
+Motor **0.1.57** oficial con `STRATA_GDN_CHUNKED=1`, `STRATA_EXPDEC=0` y `STRATA_PLE_AUTO_RAM=0`,
+y drafter **DFlash2** (`--draft dflash2`, pack `q4_0` dedicado), sobre **ROCm 10.3 propio**
+(hipBLASLt 1.5.0, tabla de 168 filas regenerada aquí). Modelos **IQ3_XXS** e **IQ3_S** (se alternan),
+contexto 131.072. El proyecto Strata sigue sobre el clon v0.1.45 con el endurecimiento propio;
+la documentación del clon es espejo de v0.2.9.
 
 ## Aviso
 

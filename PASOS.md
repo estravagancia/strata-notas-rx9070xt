@@ -1,4 +1,4 @@
-# Pasos: de cero a producción (octubre 2026)
+# Pasos: de cero a producción (octubre–noviembre 2026)
 
 Cronología real de esta caja. Cada paso dice qué se hizo y qué salió. Las versiones
 "0.1.4x" son versiones del **motor** de Strata; "v0.2.x" son los lanzamientos de Strata
@@ -138,6 +138,28 @@ comportamiento: cierre de bloques de código en el render, herramientas "retirad
 turno que siguen contando si la conversación las usó, y el lector de imágenes siguiendo al
 motor tras un cambio de versión) y la documentación del clon se resincronizó con v0.2.9.
 
-Lección de fondo de todo el mes: **casi todo lo que prometía era ruido, y lo que funcionó
-son seis cosas concretas y medidas** (tabla C2, subset español, reserva/flags de la config
-final, el protocolo de medición en sí, el runtime ROCm propio y GDN gfx12).
+## 03-11 — Motor 0.1.56: el drafter DFlash2 sustituye al cabezal MTP
+
+El motor oficial 0.1.56 trae **DFlash2**, un modelo borrador con pack propio
+(`qwen3.8-flash-next-dflash2.q4_0.pack`: el borrador ya va cuantizado en cuartos) que
+sustituye al cabezal predictor MTP. A/B del mismo día contra el control MTP:
+chat mediano **81,2 vs 77,0 (+5,5 %)**, 4K y 16K planos. Los rangos son anchos
+(69,4-126,2 del drafter frente a 71,2-97,7 del control): la mediana mejora y la
+varianza del borrador se nota. Se adoptó: la config de producción usa `--draft dflash2`,
+`--draft-fallback none` y `--draft-conf 0.7`. Muestras:
+`benches/muestras/mtp-0.1.56-control` y `df2-0.1.56-draft`.
+
+## 05-11 — Motor 0.1.57: anillo de preparación de prompt más profundo (+10,7 % en 4K)
+
+El 0.1.57 profundiza el anillo que prepara la lectura del prompt por adelantado. A/B del
+mismo día (control con el anillo en 0): **4K 2.322,6 vs 2.098,0 (+10,7 %)**, 16K y 32K
+dentro del ruido (±0,2 %); chat 82,2 vs 79,3. Se adoptó. Desde ese día el script de
+medida añade el prompt de 32K (`--long`): **3.055,5 tok/s, 10,5 s hasta el primer
+token**. Muestras: `benches/muestras/engine-0.1.57-ring0` y `engine-0.1.57-anillo`.
+
+## Lección de fondo (octubre y principios de noviembre)
+
+**Casi todo lo que prometía era ruido, y lo que funcionó son ocho cosas concretas y
+medidas**: la tabla C2, el subset español, la reserva/flags de la config final, el
+protocolo de medición en sí, el runtime ROCm propio, GDN gfx12, el drafter DFlash2 y el
+anillo de prompt más profundo.
