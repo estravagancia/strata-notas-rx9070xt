@@ -6,6 +6,7 @@
 | CPU | AMD Ryzen 7 **9800X3D** (8 núcleos / 16 hilos, Zen 5, con AVX-512) |
 | Placa base | ASUS **PRIME X870-P WIFI** (BIOS 1644, 03/2026) |
 | RAM | **64 GB** DDR5 — Corsair Vengeance RGB, 6400 MHz, 2×32 GB (dual channel) |
+| Almacenamiento | NVMe **Crucial T700 1 TB** (PCIe Gen5, `CT1000T700SSD5`): ahí viven los modelos, sus packs y la caché KV de disco (`/`, 184 GB libres a 13-11). La caja tiene además un WD_BLACK SN850X 2 TB que no usamos para los modelos. |
 | Sistema | Ubuntu Linux, kernel 7.0.0-38 (x86_64) |
 | Driver | amdgpu (sin ROCm del sistema; ver más abajo) |
 
@@ -42,11 +43,23 @@ chunked) sí rinden igual aquí con el nombre "hermano".
 
 ## Cómo encaja el hardware en el rendimiento
 
-- Los 83 GB del modelo no caben en VRAM: Strata mantiene en la tarjeta lo caliente
-  (~14,4 GiB) y el resto en RAM, y va trayendo trozos (expertos) por el PCIe.
-- Medimos el PCIe real de esta caja con la sonda del propio motor: **55,5 GB/s** → el
-  motor se autoajusta con `pcie_frac 0.55`. El cuello de botella del chat son esos
-  traslados expertos/PCIe, no la GPU.
-- RAM de sistema: ~49-55 GB consumidos con el servidor encima. **No cabe un segundo
-  modelo en paralelo.**
-- La cache de expertos quedó en ~3.800-4.500 ranuras (6,2 GiB) según reserva de VRAM.
+Etiqueta de modelos: la producción actual es **IQ3_S**; **IQ3_XXS** fue la producción del
+20-10 al 12-11. Ninguna de estas cifras es intercambiable entre los dos.
+
+- Tamaños del modelo en disco (medidos el 13-11 sobre los shards GGUF de
+  `~/Strata-data/models/`): **IQ3_S, 83,6 GB** (2 shards de 52+27 GiB); **IQ3_XXS, 75,8 GB**
+  (44+27 GiB). Ninguno cabe en los 16 GiB de VRAM: Strata mantiene en la tarjeta lo que se
+  usa a menudo (cache de expertos y KV residentes, que el motor autogestiona) y el resto
+  queda en RAM, trayendo expertos por el PCIe.
+- La sonda PCIe del propio motor mide en esta caja **entre 47,4 y 55,3 GB/s según el
+  arranque** (rango observado en los logs de octubre y noviembre de los dos modelos). El
+  motor no se queda en un número fijo: autoajusta `pcie_frac` con el ritmo real de traslado
+  de bytes de expertos (en producción con IQ3_S se observó 0,40 → 0,45). El cuello de
+  botella del chat son esos traslados expertos/PCIe, no la GPU: la palanca es la tasa de
+  acierto de la cache de expertos (observada del 60-84 % en los logs).
+- Las ranuras de la cache de expertos **no son un número fijo ni generalizable**: dependen
+  del modelo y de la reserva de VRAM (`--vram-reserve-mib`, 1536 por defecto). Ejemplos
+  medidos en los logs: con **IQ3_S** en producción **4.105-4.121 ranuras (7,83-7,86 GiB)**
+  (en un arranque con menos VRAM libre, 9,88 GiB en vez de ~10,2, bajó a 3.170); con
+  **IQ3_XXS** y visión activada **5.025 (8,15 GiB)** y 3.710 (6,05 GiB) en el laboratorio
+  con 3.072 MiB reservados.
