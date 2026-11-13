@@ -1,0 +1,2507 @@
+From b29fe5cbd9c95abeca0a4e44aa56247feb06daeb Mon Sep 17 00:00:00 2001
+From: kinoyu-ai <ippanzin.ippan@gmail.com>
+Date: Thu, 12 Nov 2026 23:29:11 +0000
+Subject: [PATCH] CacheKV (fork kinoyu-ai/Strata-CacheKV-kinoyu): KV en disco
+ que sobrevive reinicios + espejos RAM + PLE disk cache
+
+Parche del autor, aplicado sobre la base v0.2.11 (tag c3b3f503) con
+`git apply --3way` limpio desde el diff de codigo del fork sobre su base v0.2.12
+(23 ficheros, +1731/-56; el diff original completo era de 2444 lineas con docs).
+Equivalencia con los commits originales del fork (base v0.2.12, rama main):
+  459a6fd0 conversation disk cache desechable
+  5a94a37b striped PLE disk cache + desbordamiento KV primero-RAM
+  aad866ea snapshots KV persistentes a reinicios + espejos RAM
+(ce97a77a es la fusion de v0.2.12, no aporta codigo propio; aqui no hace falta.)
+
+Flags nuevos (verificados en --help del componente 0.1.57.90):
+  --conversation-cache-dir DIR, --conversation-cache-disk-mib 12288,
+  --conversation-cache-disk-min-tokens 60001, --conversation-cache-tier-order
+  ram-first|disk-first, --conversation-cache-disk-min-free-mib,
+  --conversation-cache-persist, --ple-disk-cache DIR MIB.
+Opt-in: sin esas flags el binario se comporta como 0.1.57 (arranques y slots
+identicos verificados en server.log; A/B de no-regresion 2026-11-12: 4K -0,16 %,
+16K +0,01 %, TTFT +/-0,2 %, chat media-9 +1,84 %).
+
+Medida en esta caja (IQ3_S, RX 9070 XT): prefill post-reinicio de 29 347 tok
+8 651,7 -> 633,6 ms (-92,7 %), reused 29 340 (bench/runs/2026-11-12-2255-kv-kinoy1b).
+---
+ CMakeLists.txt                                |  17 +
+ include/strata/core/conversation_buffer.hpp   |  32 +-
+ include/strata/core/conversation_cache.hpp    |  20 +-
+ include/strata/core/conversation_disk.hpp     | 299 ++++++++++++++
+ .../strata/core/conversation_disk_index.hpp   |  87 ++++
+ include/strata/core/conversation_file.hpp     |   1 +
+ include/strata/core/conversation_snapshot.hpp |   6 +
+ include/strata/kernels/ngram.hpp              |   3 +
+ include/strata/ngram/ple_disk_cache.hpp       | 259 ++++++++++++
+ include/strata/ngram/ple_disk_options.hpp     |   8 +
+ include/strata/ngram/ple_reader.hpp           |   8 +-
+ src/core/conversation_cache_test.cpp          |  22 +
+ src/core/conversation_disk_test.cpp           |  67 +++
+ src/core/conversation_file.cpp                |  34 +-
+ src/core/conversation_file_test.cpp           |  44 ++
+ src/core/conversation_persistent_test.cpp     |  79 ++++
+ src/core/conversation_snapshot_test.cpp       |  24 ++
+ src/core/conversation_state.cpp               |  27 +-
+ src/core/conversation_tiers_test.cpp          |  62 +++
+ src/kernels/ngram.cpp                         |   8 +-
+ src/ngram/ple_disk_cache_test.cpp             | 112 +++++
+ src/ngram/ple_reader.cpp                      | 179 ++++++--
+ src/program/generate.cpp                      | 389 +++++++++++++++++-
+ 23 files changed, 1731 insertions(+), 56 deletions(-)
+ create mode 100644 include/strata/core/conversation_disk.hpp
+ create mode 100644 include/strata/core/conversation_disk_index.hpp
+ create mode 100644 include/strata/ngram/ple_disk_cache.hpp
+ create mode 100644 include/strata/ngram/ple_disk_options.hpp
+ create mode 100644 src/core/conversation_disk_test.cpp
+ create mode 100644 src/core/conversation_persistent_test.cpp
+ create mode 100644 src/core/conversation_tiers_test.cpp
+ create mode 100644 src/ngram/ple_disk_cache_test.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d273c7c4c..0dd3dfd8a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -177,6 +177,23 @@ option(STRATA_NATIVE_EXPERTS "Native (IQ) expert support through ggml-cpu" ON)
+ 
+ if(STRATA_BUILD_CONVERSATION_TESTS)
+   enable_testing()
++  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++    add_executable(ple_disk_cache_test src/ngram/ple_disk_cache_test.cpp src/ngram/ple_reader.cpp src/platform/direct_file.cpp)
++    target_include_directories(ple_disk_cache_test PRIVATE include)
++    target_compile_features(ple_disk_cache_test PRIVATE cxx_std_20)
++    target_link_libraries(ple_disk_cache_test PRIVATE Threads::Threads)
++    add_test(NAME ple_disk_cache_test COMMAND ple_disk_cache_test)
++    set_tests_properties(ple_disk_cache_test PROPERTIES TIMEOUT 90)
++    add_executable(conversation_tiers_test src/core/conversation_tiers_test.cpp src/core/conversation_file.cpp)
++    target_include_directories(conversation_tiers_test PRIVATE include)
++    add_test(NAME conversation_tiers_test COMMAND conversation_tiers_test)
++    add_executable(conversation_persistent_test src/core/conversation_persistent_test.cpp src/core/conversation_file.cpp)
++    target_include_directories(conversation_persistent_test PRIVATE include)
++    add_test(NAME conversation_persistent_test COMMAND conversation_persistent_test)
++    add_executable(conversation_disk_test src/core/conversation_disk_test.cpp)
++    target_include_directories(conversation_disk_test PRIVATE include)
++    add_test(NAME conversation_disk_test COMMAND conversation_disk_test)
++  endif()
+   add_executable(conversation_cache_test src/core/conversation_cache_test.cpp)
+   target_include_directories(conversation_cache_test PRIVATE include)
+   add_test(NAME conversation_cache_test COMMAND conversation_cache_test)
+diff --git a/include/strata/core/conversation_buffer.hpp b/include/strata/core/conversation_buffer.hpp
+index 2ba8aaa63..5859a942b 100644
+--- a/include/strata/core/conversation_buffer.hpp
++++ b/include/strata/core/conversation_buffer.hpp
+@@ -7,6 +7,8 @@
+ #include <cstdint>
+ #include <cstring>
+ #include <initializer_list>
++#include <functional>
++#include <stdexcept>
+ #include <memory>
+ #include <utility>
+ #include <vector>
+@@ -30,14 +32,21 @@ public:
+     ConversationBuffer(const ConversationBuffer&) = default;
+     ConversationBuffer& operator=(const ConversationBuffer&) = default;
+     ConversationBuffer(ConversationBuffer&& other) noexcept
+-        : segments_(std::move(other.segments_)), size_(std::exchange(other.size_, 0)) {}
++        : segments_(std::move(other.segments_)), reader_(std::move(other.reader_)), size_(std::exchange(other.size_, 0)) {}
+     ConversationBuffer& operator=(ConversationBuffer&& other) noexcept {
+         if (this == &other) return *this;
+         segments_ = std::move(other.segments_);
++        reader_ = std::move(other.reader_);
+         size_ = std::exchange(other.size_, 0);
+         return *this;
+     }
+ 
++    // Immutable, bounded-read backing for a validated temporary session file.
++    // The callback owns its open file handle, so rename/unlink cannot change its identity.
++    void file_backed(size_t n, std::function<bool(size_t, void*, size_t)> reader) {
++        segments_.clear(); reader_ = std::move(reader); size_ = n;
++    }
++    bool is_file_backed() const { return bool(reader_); }
+     size_t size() const { return size_; }
+     bool empty() const { return size_ == 0; }
+     size_t bytes() const {
+@@ -64,6 +73,7 @@ public:
+     }
+     void resize(size_t n, uint8_t value = 0) { resize_impl(n, &value); }
+     void resize_impl(size_t n, const uint8_t* value) {
++        if (reader_) throw std::logic_error("cannot resize an immutable disk conversation buffer");
+         if (n > size_) {
+             const size_t held = size_;
+             const bool growing = held != 0;
+@@ -116,6 +126,15 @@ public:
+     }
+     bool operator==(const ConversationBuffer& other) const {
+         if (size_ != other.size_) return false;
++        if (reader_ || other.reader_) {
++            bool equal = true;
++            const bool visited = visit(0, size_, [&](const uint8_t* p, size_t n, size_t at) {
++                std::vector<uint8_t> rhs(n);
++                equal = other.read(rhs.data(), at, n) && !std::memcmp(p, rhs.data(), n);
++                return equal;
++            });
++            return visited && equal;
++        }
+         size_t a = 0, b = 0, x = 0, y = 0;
+         while (a < segments_.size() && b < other.segments_.size()) {
+             const auto& left = segments_[a];
+@@ -158,6 +177,16 @@ private:
+     }
+     template<class Self, class Fn> static bool visit_impl(Self& self, size_t offset, size_t count, Fn fn) {
+         if (offset > self.size_ || count > self.size_ - offset) return false;
++        if (self.reader_) {
++            std::vector<uint8_t> block(std::min(count, segment_bytes));
++            while (count) {
++                const size_t n = std::min(count, segment_bytes);
++                if (!self.reader_(offset, block.data(), n) || !fn(block.data(), n, offset)) return false;
++                offset += n; count -= n;
++                progress_beat();
++            }
++            return true;
++        }
+         size_t begin = 0;
+         for (auto& segment : self.segments_) {
+             if (!count) break;
+@@ -172,6 +201,7 @@ private:
+         return count == 0;
+     }
+     std::vector<Segment> segments_;
++    std::function<bool(size_t, void*, size_t)> reader_;
+     size_t size_ = 0;
+ };
+ 
+diff --git a/include/strata/core/conversation_cache.hpp b/include/strata/core/conversation_cache.hpp
+index 78ff9f189..d0d55019a 100644
+--- a/include/strata/core/conversation_cache.hpp
++++ b/include/strata/core/conversation_cache.hpp
+@@ -9,6 +9,8 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <deque>
++#include <functional>
++#include <cstdio>
+ #include <memory>
+ #include <utility>
+ #include <vector>
+@@ -406,13 +408,24 @@ public:
+     // own allocation, far above glibc's mmap threshold, so dropping an entry returns the whole footprint
+     // to the kernel at once - the next admission check reads it back from /proc/meminfo.
+     // False when none can go (empty, or only entries that hold a pinned shared prefix are left).
++    // A capacity/RAM-pressure eviction can hand ownership to a slower tier. Explicit clear(), poison flushes,
++    // take(), and superseded-copy removal never spill. The evicted image no longer counts against the RAM budget.
++    void set_eviction_sink(std::function<void(SavedConversation&&)> sink) { eviction_sink_ = std::move(sink); }
++    void external_park_succeeded() { guard_blocked_ = false; }
+     bool evict_oldest() {
+         // the oldest entry that holds no pinned shared prefix and is not the guarded (borrowed) donor
+         for (size_t i = 0; i < entries_.size(); ++i) {
+             if (entries_[i].pinned() || (guarded_ != 0 && serials_[i] == guarded_)) continue;
+-            bytes_ -= entries_[i].bytes();
+-            erase(i);
+-            ++evictions_;
++            if (eviction_sink_) {
++                SavedConversation outgoing = take(i);
++                ++evictions_;
++                try { eviction_sink_(std::move(outgoing)); }
++                catch (...) { std::fprintf(stderr, "strata serve: RAM cache spill failed; dropping evicted conversation\n"); }
++            } else {
++                bytes_ -= entries_[i].bytes();
++                erase(i);
++                ++evictions_;
++            }
+             return true;
+         }
+         return false;
+@@ -532,6 +545,7 @@ private:
+     }
+     size_t budget_ = 0, slots_ = 0, bytes_ = 0, evictions_ = 0, superseded_ = 0, borrowed_ = 0;
+     int64_t min_tokens_ = 0;   // --conversation-cache-min-tokens: 0 parks every conversation, whatever its size
++    std::function<void(SavedConversation&&)> eviction_sink_;
+     std::deque<SavedConversation> entries_; // least recently active first
+     std::deque<uint64_t> serials_;          // entries_[i]'s identity, never reused
+     uint64_t next_serial_ = 1, guarded_ = 0;
+diff --git a/include/strata/core/conversation_disk.hpp b/include/strata/core/conversation_disk.hpp
+new file mode 100644
+index 000000000..e08b8b89c
+--- /dev/null
++++ b/include/strata/core/conversation_disk.hpp
+@@ -0,0 +1,299 @@
++#pragma once
++// Disposable by default; optional restart-persistent tier. Only matching metadata stays in RAM.
++#include "strata/core/conversation_cache.hpp"
++#include "strata/core/conversation_disk_index.hpp"
++#include <filesystem>
++#include <functional>
++#include <cstdio>
++#include <stdexcept>
++#include <string>
++#if defined(__linux__)
++#include <fcntl.h>
++#include <sys/file.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#endif
++
++namespace strata::core {
++class ConversationDiskCache {
++public:
++    struct Entry {
++        uint64_t serial = 0, used = 0, bytes = 0;
++        bool cvec = true;
++        ConversationCheckpoint live;
++        std::vector<ConversationCheckpoint> checkpoints;
++        std::vector<std::string> files;
++        std::filesystem::path dir;
++    };
++    struct Match { uint64_t serial = 0; int64_t tokens = 0; bool live = false; };
++    ConversationDiskCache() = default;
++    ConversationDiskCache(const ConversationDiskCache&) = delete;
++    ConversationDiskCache& operator=(const ConversationDiskCache&) = delete;
++    ~ConversationDiskCache() { close(); }
++    bool open(const std::string& root, uint64_t budget, int64_t min_tokens, std::string& error,
++              bool persistent = false, uint64_t compatibility = 0, uint64_t max_tokens = 1048576) {
++        close();
++        if (root.empty() || !budget) return true;
++#if defined(__linux__)
++        try {
++            namespace fs = std::filesystem;
++            fs::path base(root);
++            if (fs::create_directories(base)) fs::permissions(base, fs::perms::owner_all);
++            struct stat st{};
++            if (::lstat(root.c_str(), &st) || !S_ISDIR(st.st_mode) || st.st_uid != ::getuid() || (st.st_mode & 0022))
++                throw std::runtime_error("cache root must be an owned directory without group/other write access");
++            lock_ = ::open((base / ".lock").c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
++            if (lock_ < 0 || ::flock(lock_, LOCK_EX | LOCK_NB))
++                throw std::runtime_error("cache root is unavailable or already used by another engine");
++            for (const auto& item : fs::directory_iterator(base))
++                if (item.path().filename().string().rfind("run-", 0) == 0) {
++                    fs::remove_all(item.path());
++                    std::fprintf(stderr, "strata serve: disk cache: removed stale %s\n", item.path().filename().c_str());
++                }
++            persistent_ = persistent; compatibility_ = compatibility; max_tokens_ = max_tokens;
++            run_ = base / (persistent ? "persistent" : "run-" + std::to_string(::getpid()));
++            if (fs::exists(fs::symlink_status(run_))) {
++                struct stat rs{};
++                if (::lstat(run_.c_str(), &rs) || !S_ISDIR(rs.st_mode) || rs.st_uid != ::getuid() || (rs.st_mode & 0022))
++                    throw std::runtime_error("persistent cache directory ownership/type");
++            } else if (!fs::create_directory(run_)) throw std::runtime_error("create cache directory");
++            fs::permissions(run_, fs::perms::owner_all);
++            budget_ = budget; min_tokens_ = min_tokens;
++            if (persistent_) { disk_index::sync_dir(base); recover(); }
++            return true;
++        } catch (const std::exception& e) { error = e.what(); close(); return false; }
++#else
++        error = "the disposable disk cache currently requires Linux";
++        return false;
++#endif
++    }
++    bool persistent() const { return persistent_; }
++    bool enabled() const { return budget_ != 0; }
++    bool wants(size_t n) const { return enabled() && n >= (uint64_t) min_tokens_; }
++    uint64_t bytes() const { return bytes_; }
++    size_t size() const { return entries_.size(); }
++    const Entry* find(uint64_t serial) const {
++        for (const auto& e : entries_) if (e.serial == serial) return &e;
++        return nullptr;
++    }
++    template<class Token> Match best(const std::vector<Token>& ids, const std::vector<ConversationImageKey>& imgs,
++                                     bool cvec) const {
++        Match m; uint64_t last = 0;
++        if (!enabled()) return m;
++        for (const auto& e : entries_) {
++            if (e.cvec != cvec) continue;
++            auto consider = [&](const ConversationCheckpoint& cp, bool live) {
++                const auto n = conversation_prefix(cp, ids, imgs);
++                if (n > m.tokens || (n > 0 && n == m.tokens && e.used > last)) {
++                    m = {e.serial, n, live}; last = e.used;
++                }
++            };
++            consider(e.live, true);
++            for (const auto& cp : e.checkpoints) consider(cp, false);
++        }
++        return m;
++    }
++    void guard(uint64_t serial) { guarded_ = serial; }
++    void unguard() { guarded_ = 0; }
++    void touch(uint64_t serial) {
++        for (auto& e : entries_) if (e.serial == serial) {
++            e.used = ++clock_;
++            if (persistent_) try { write_index(e); } catch(const std::exception& x) {
++                std::fprintf(stderr,"strata serve: disk cache: LRU index update failed: %s\n",x.what());
++            }
++        }
++    }
++    void set_prefer_keep(std::function<bool(const Entry&)> keep) { prefer_keep_ = std::move(keep); }
++    bool contains(const std::vector<int32_t>& ids, const std::vector<ConversationImageKey>& imgs,
++                  const std::vector<ConversationCheckpoint>& checks, bool cvec) {
++        const auto* cp = session_checkpoint(checks);
++        for (auto& e : entries_) if(e.cvec==cvec && e.live.ids==ids && e.live.imgs==imgs &&
++            ((!cp && e.checkpoints.empty()) || (cp && e.checkpoints.size()==1 &&
++             e.checkpoints[0].ids==cp->ids && e.checkpoints[0].imgs==cp->imgs))) {
++            touch(e.serial); return true;
++        }
++        return false;
++    }
++    void erase(uint64_t serial, const char* reason) {
++        for (auto it = entries_.begin(); it != entries_.end(); ++it) if (it->serial == serial) {
++            std::error_code ec;
++            std::filesystem::remove_all(it->dir, ec);
++            if (ec) {
++                budget_ = 0;
++                std::fprintf(stderr, "strata serve: disk cache disabled: cannot remove entry (%s)\n", ec.message().c_str());
++            }
++            std::fprintf(stderr, "strata serve: disk cache: removed %zu tokens, %llu bytes (%s)\n",
++                         it->live.ids.size(), (unsigned long long) it->bytes, reason);
++            bytes_ -= it->bytes; entries_.erase(it);
++            if (persistent_ && !ec) try { disk_index::sync_dir(run_); } catch (const std::exception& x) {
++                std::fprintf(stderr,"strata serve: disk cache: deletion flush failed: %s\n",x.what());
++            }
++            return;
++        }
++    }
++    void clear() { while (!entries_.empty()) erase(entries_.back().serial, "flush"); }
++    // writer(file, stage, bytes, error). No entry is visible until every stage succeeds.
++    bool store(const std::vector<int32_t>& ids, const std::vector<ConversationImageKey>& imgs,
++               const std::vector<ConversationCheckpoint>& checks, bool cvec, size_t stages, uint64_t estimate,
++               const std::function<bool(const std::string&, size_t, size_t&, std::string&)>& writer,
++               std::string& error, bool mirror = false) {
++        if (!enabled() || (!mirror && !wants(ids.size()))) return false;
++        if (persistent_ && contains(ids, imgs, checks, cvec)) return true;
++        std::filesystem::path pending;
++        try {
++            if (estimate > budget_) { error = "snapshot exceeds disk budget"; return false; }
++            while (bytes_ > budget_ - estimate && !entries_.empty()) {
++                auto oldest = entries_.end();
++                for (auto it = entries_.begin(); it != entries_.end(); ++it) {
++                    if (it->serial == guarded_) continue;
++                    const bool keep = prefer_keep_ && prefer_keep_(*it);
++                    const bool old_keep = oldest != entries_.end() && prefer_keep_ && prefer_keep_(*oldest);
++                    if (oldest == entries_.end() || (old_keep && !keep) || (keep == old_keep && it->used < oldest->used)) oldest = it;
++                }
++                if (oldest == entries_.end()) { error = "no room beside incoming conversation"; return false; }
++                erase(oldest->serial, "LRU capacity");
++                if (!enabled()) { error = "disk eviction failed"; return false; }
++            }
++            Entry e; e.serial = ++serial_; e.used = ++clock_; e.cvec = cvec;
++            e.live.ids = ids; e.live.imgs = imgs;
++            if (const auto* cp = session_checkpoint(checks)) {
++                e.checkpoints.emplace_back(); e.checkpoints.back().ids = cp->ids; e.checkpoints.back().imgs = cp->imgs;
++            }
++            pending = run_ / std::to_string(e.serial);
++            if (!std::filesystem::create_directory(pending)) throw std::runtime_error("cache entry directory exists");
++            std::filesystem::permissions(pending,std::filesystem::perms::owner_all); e.dir = pending;
++            for (size_t k = 0; k < stages; ++k) {
++                auto path = (pending / ("stage-" + std::to_string(k) + ".bin")).string();
++                size_t bytes = 0;
++                if (!writer(path, k, bytes, error)) throw std::runtime_error(error);
++                if (bytes > estimate - e.bytes) throw std::runtime_error("snapshot exceeded reservation");
++                e.bytes += bytes; e.files.push_back(std::move(path));
++            }
++            if (persistent_) {
++                const auto index_size = index_bytes(e).size();
++                if (index_size > estimate - e.bytes) throw std::runtime_error("disk index exceeded reservation");
++                e.bytes += index_size;
++                write_index(e);
++                disk_index::sync_dir(run_);
++            }
++            // Replace an identical or strictly extended saved branch only after the new one is complete.
++            std::vector<uint64_t> replaced;
++            for (const auto& old : entries_) if (old.cvec == cvec && old.serial != guarded_) {
++                auto covered = [&](const ConversationCheckpoint& cp) {
++                    return conversation_covers(e.live, cp.ids, cp.imgs) ||
++                        std::any_of(e.checkpoints.begin(), e.checkpoints.end(), [&](const auto& c) {
++                            return conversation_covers(c, cp.ids, cp.imgs);
++                        });
++                };
++                if (covered(old.live) && std::all_of(old.checkpoints.begin(), old.checkpoints.end(), covered))
++                    replaced.push_back(old.serial);
++            }
++            for (auto serial : replaced) erase(serial, "superseded");
++            if (!enabled()) throw std::runtime_error("disk eviction failed");
++            const auto added = e.bytes;
++            entries_.push_back(std::move(e)); bytes_ += added;
++            return true;
++        } catch (const std::exception& e) {
++            error = e.what();
++            if (!pending.empty()) { std::error_code ec; std::filesystem::remove_all(pending, ec); }
++            return false;
++        }
++    }
++private:
++    static const ConversationCheckpoint* session_checkpoint(const std::vector<ConversationCheckpoint>& checks) {
++        const ConversationCheckpoint* cp = nullptr;
++        for (const auto& c : checks) if (!cp || c.ids.size() > cp->ids.size()) cp = &c;
++        return cp;
++    }
++    void close() noexcept {
++        entries_.clear();
++        if (!run_.empty()) {
++            if (!persistent_) { std::error_code ec; std::filesystem::remove_all(run_, ec); }
++            run_.clear();
++        }
++#if defined(__linux__)
++        if (lock_ >= 0) { ::close(lock_); lock_ = -1; }
++#endif
++        budget_ = bytes_ = serial_ = clock_ = guarded_ = 0;
++        persistent_ = false; prefer_keep_ = {};
++    }
++    std::vector<uint8_t> index_bytes(const Entry& e) const {
++        disk_index::Codec c;
++        c.put(0x31584944564b5453ull); c.put(compatibility_); c.put(e.serial); c.put(e.used);
++        c.put(e.cvec ? 1 : 0); c.put(e.files.size()); c.put(e.bytes);
++        c.checkpoint(e.live); c.put(e.checkpoints.size());
++        for(const auto& cp:e.checkpoints)c.checkpoint(cp);
++        c.put(disk_index::hash(c.b,c.b.size()));return std::move(c.b);
++    }
++    void write_index(const Entry& e) const {
++#if defined(__linux__)
++        disk_index::write(e.dir / "index.bin",index_bytes(e));
++#else
++        (void)e;
++#endif
++    }
++    void recover() {
++#if defined(__linux__)
++        namespace fs=std::filesystem;
++        uint64_t metadata=0;
++        for(const auto& item:fs::directory_iterator(run_)) {
++            try {
++                struct stat st{};
++                if(::lstat(item.path().c_str(),&st)||!S_ISDIR(st.st_mode)||st.st_uid!=::getuid()||(st.st_mode&0022))
++                    throw std::runtime_error("entry type/owner");
++                auto c=disk_index::read(item.path()/"index.bin");
++                const auto index_size=c.b.size();
++                if(metadata+index_size>disk_index::max_bytes || entries_.size()>=4096)
++                    throw std::runtime_error("index memory limit");
++                c.at=c.b.size()-8;const auto checksum=c.get();c.b.resize(c.b.size()-8);c.at=0;
++                if(disk_index::hash(c.b,c.b.size())!=checksum)throw std::runtime_error("index checksum");
++                if(c.get()!=0x31584944564b5453ull || c.get()!=compatibility_)throw std::runtime_error("different model/build/configuration");
++                Entry e;e.serial=c.get();e.used=c.get();const auto mode=c.get();const auto stages=c.get();e.bytes=c.get();
++                if(!e.serial || e.serial==UINT64_MAX || e.used==UINT64_MAX || mode>1 || stages<1 || stages>8 ||
++                   item.path().filename()!=std::to_string(e.serial))throw std::runtime_error("index geometry");
++                e.cvec=mode!=0;e.dir=item.path();c.checkpoint(e.live,max_tokens_);
++                if(e.live.ids.empty())throw std::runtime_error("empty entry");
++                auto n=c.get();if(n>1)throw std::runtime_error("index checkpoint count");e.checkpoints.resize((size_t)n);
++                for(auto& cp:e.checkpoints)c.checkpoint(cp,max_tokens_);
++                if(c.at!=c.b.size())throw std::runtime_error("trailing disk index bytes");
++                uint64_t total=index_size;
++                for(size_t k=0;k<stages;++k) {
++                    auto path=e.dir/("stage-"+std::to_string(k)+".bin");struct stat part{};
++                    if(::lstat(path.c_str(),&part)||!S_ISREG(part.st_mode)||part.st_nlink!=1||part.st_uid!=::getuid()||
++                       (part.st_mode&0022)||part.st_size<=0 || (uint64_t)part.st_size>UINT64_MAX-total)
++                        throw std::runtime_error("missing/invalid stage file");
++                    total+=(uint64_t)part.st_size;e.files.push_back(path.string());
++                }
++                for(const auto& file:fs::directory_iterator(e.dir)) {
++                    const auto name=file.path().filename().string();
++                    if(name.rfind(".index-",0)==0) {fs::remove_all(file.path());continue;}
++                    if(name!="index.bin" && std::find(e.files.begin(),e.files.end(),file.path().string())==e.files.end())
++                        throw std::runtime_error("uncommitted file in entry");
++                }
++                if(total!=e.bytes || total>budget_)throw std::runtime_error("entry size/budget");
++                if(total>UINT64_MAX-bytes_)throw std::runtime_error("cache size overflow");
++                bytes_+=total;serial_=std::max(serial_,e.serial);clock_=std::max(clock_,e.used);
++                metadata+=index_size;entries_.push_back(std::move(e));
++            } catch(const std::exception& x) {
++                std::fprintf(stderr,"strata serve: persistent disk cache: discard %s: %s\n",item.path().filename().c_str(),x.what());
++                fs::remove_all(item.path());
++            }
++        }
++        while(bytes_>budget_ && !entries_.empty()) {
++            auto oldest=std::min_element(entries_.begin(),entries_.end(),[](const auto& a,const auto& b){return a.used<b.used;});
++            erase(oldest->serial,"startup LRU capacity");
++        }
++        std::fprintf(stderr,"strata serve: persistent disk cache: indexed %zu entries, %llu bytes; payloads validated on reuse\n",
++                     entries_.size(),(unsigned long long)bytes_);
++#endif
++    }
++    bool persistent_ = false;
++    uint64_t compatibility_ = 0, max_tokens_ = 1048576;
++    std::function<bool(const Entry&)> prefer_keep_;
++    int lock_ = -1;
++    std::filesystem::path run_;
++    std::vector<Entry> entries_;
++    uint64_t budget_ = 0, bytes_ = 0, serial_ = 0, clock_ = 0, guarded_ = 0;
++    int64_t min_tokens_ = 60001;
++};
++} // namespace strata::core
+diff --git a/include/strata/core/conversation_disk_index.hpp b/include/strata/core/conversation_disk_index.hpp
+new file mode 100644
+index 000000000..bcdb3d808
+--- /dev/null
++++ b/include/strata/core/conversation_disk_index.hpp
+@@ -0,0 +1,87 @@
++#pragma once
++// Small durable index only. GPU session files remain the authority and are fully validated before restore.
++#include "strata/core/conversation_cache.hpp"
++#include <filesystem>
++#include <string>
++#include <vector>
++#include <stdexcept>
++#include <limits>
++#include <cstdio>
++#include <cerrno>
++#include <cstdlib>
++#if defined(__linux__)
++#include <fcntl.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#endif
++namespace strata::core::disk_index {
++constexpr size_t max_bytes = 64u << 20;
++inline uint64_t hash(const std::vector<uint8_t>& b, size_t n) {
++    uint64_t h=1469598103934665603ull;
++    for(size_t i=0;i<n;++i) h=(h^b[i])*1099511628211ull;
++    return h;
++}
++struct Codec {
++    std::vector<uint8_t> b; size_t at=0;
++    void put(uint64_t v, size_t n=8) { for(size_t i=0;i<n;++i) b.push_back((uint8_t)(v>>(i*8))); }
++    uint64_t get(size_t n=8) {
++        if(n>b.size()-at) throw std::runtime_error("truncated disk index");
++        uint64_t v=0;for(size_t i=0;i<n;++i)v|=(uint64_t)b[at++]<<(8*i);return v;
++    }
++    void checkpoint(const ConversationCheckpoint& c) {
++        put(c.ids.size());for(int32_t t:c.ids) put((uint32_t)t,4);
++        put(c.imgs.size());for(const auto& x:c.imgs){put((uint64_t)x.start);put(x.hash);}
++    }
++    void checkpoint(ConversationCheckpoint& c, uint64_t max_tokens) {
++        uint64_t n=get();if(n>max_tokens||n>(b.size()-at)/4)throw std::runtime_error("disk index token count");
++        c.ids.resize((size_t)n);for(auto& t:c.ids)t=(int32_t)(uint32_t)get(4);
++        n=get();if(n>max_tokens||n>(b.size()-at)/16)throw std::runtime_error("disk index image count");
++        c.imgs.resize((size_t)n);for(auto& x:c.imgs){x.start=(int64_t)get();x.hash=get();}
++    }
++};
++#if defined(__linux__)
++inline void sync_dir(const std::filesystem::path& path) {
++    int fd=::open(path.c_str(),O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
++    if(fd<0)throw std::runtime_error("open disk index directory");
++    int r=::fsync(fd);::close(fd);if(r)throw std::runtime_error("flush disk index directory");
++}
++inline void write(const std::filesystem::path& path,const std::vector<uint8_t>& b) {
++    if(b.size()>max_bytes)throw std::runtime_error("disk index too large");
++    std::string pattern=(path.parent_path()/".index-XXXXXX").string();
++    std::vector<char> tmp(pattern.begin(),pattern.end());tmp.push_back(0);
++    int fd=::mkstemp(tmp.data());if(fd<0)throw std::runtime_error("create disk index");
++    bool renamed=false;
++    try {
++        if(::fchmod(fd,0600))throw std::runtime_error("disk index permissions");
++        size_t at=0;while(at<b.size()) {
++            ssize_t n=::write(fd,b.data()+at,b.size()-at);
++            if(n<0&&errno==EINTR)continue;
++            if(n<=0)throw std::runtime_error("write disk index");at+=(size_t)n;
++        }
++        if(::fsync(fd))throw std::runtime_error("flush disk index");
++        ::close(fd);fd=-1;
++        if(::rename(tmp.data(),path.c_str()))throw std::runtime_error("publish disk index");
++        renamed=true;sync_dir(path.parent_path());
++    } catch(...) {if(fd>=0)::close(fd);if(!renamed)::unlink(tmp.data());throw;}
++}
++inline Codec read(const std::filesystem::path& path) {
++    int fd=::open(path.c_str(),O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
++    if(fd<0)throw std::runtime_error("open disk index");
++    try {
++        struct stat st{};
++        if(::fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_nlink!=1||st.st_uid!=::getuid()||
++           (st.st_mode&0022)||st.st_size<80||(uint64_t)st.st_size>max_bytes)
++            throw std::runtime_error("disk index file bounds/type/owner");
++        Codec c;c.b.resize((size_t)st.st_size);size_t at=0;
++        while(at<c.b.size()) {
++            ssize_t n=::read(fd,c.b.data()+at,c.b.size()-at);
++            if(n<0&&errno==EINTR)continue;
++            if(n<=0)throw std::runtime_error("read disk index");at+=(size_t)n;
++        }
++        ::close(fd);return c;
++    } catch(...) {::close(fd);throw;}
++}
++#else
++inline void sync_dir(const std::filesystem::path&) { throw std::runtime_error("persistent disk index requires Linux"); }
++#endif
++} // namespace strata::core::disk_index
+diff --git a/include/strata/core/conversation_file.hpp b/include/strata/core/conversation_file.hpp
+index 069ca2423..0c8af54d2 100644
+--- a/include/strata/core/conversation_file.hpp
++++ b/include/strata/core/conversation_file.hpp
+@@ -206,6 +206,7 @@ bool session_save_checkpoints(const std::vector<ConversationCheckpoint>& chain,
+ // these limits BEFORE its array is allocated; the defaults accept whatever the payload can hold.  The engine sets all
+ // of them from its runtime (conversation_session_read_limits), and then the file size is bounded too.
+ struct SessionReadLimits {
++    bool stream_kv = false; // keep K/V in its open file; hash it in bounded blocks before exposing it
+     uint64_t max_file_bytes = UINT64_MAX;
+     uint64_t max_tokens = UINT64_MAX;       // token and image counts of the live state and of each checkpoint
+     uint64_t max_checkpoints = UINT64_MAX;
+diff --git a/include/strata/core/conversation_snapshot.hpp b/include/strata/core/conversation_snapshot.hpp
+index 27ba8c9bd..26c3a70a3 100644
+--- a/include/strata/core/conversation_snapshot.hpp
++++ b/include/strata/core/conversation_snapshot.hpp
+@@ -55,6 +55,9 @@ bool conversation_kv_part_sizes(const QsaState& state, const ModelGeometry& g, i
+ bool conversation_session_read_limits(SessionReadLimits& limits, const SessionState& session, const ModelGeometry& g,
+                                       const QsaState& draft, uint64_t max_tokens, uint64_t max_checkpoints,
+                                       std::string& error);
++bool conversation_session_read_limits(SessionReadLimits& limits, const SessionState& session, const ModelGeometry& g,
++                                      const QsaState* draft, uint64_t max_tokens, uint64_t max_checkpoints,
++                                      std::string& error);
+ 
+ struct ConversationStateSizes {
+     size_t gdn = 0, ple = 0, tail = 0, dead = 0, block_pos = 0;
+@@ -139,6 +142,9 @@ bool conversation_snapshot_save(SavedConversation& image, const ConversationView
+ bool conversation_snapshot_sources(SavedConversation& meta, std::vector<SessionKvSource>& sources,
+                                    const ConversationView& view, const SessionState& session,
+                                    const ModelGeometry& g, const QsaState& draft, std::string& error);
++bool conversation_snapshot_sources(SavedConversation& meta, std::vector<SessionKvSource>& sources,
++                                   const ConversationView& view, const SessionState& session,
++                                   const ModelGeometry& g, const QsaState* draft, std::string& error);
+ bool conversation_snapshot_validate(const SavedConversation& image, const SessionState& session,
+                                     const ModelGeometry& g, const QsaState& draft, std::string& error);
+ /// #2409: true when a restore (or a copy) on CUDA device `device` from the calling thread creates no copy stream: this
+diff --git a/include/strata/kernels/ngram.hpp b/include/strata/kernels/ngram.hpp
+index 680631afe..ced542a90 100644
+--- a/include/strata/kernels/ngram.hpp
++++ b/include/strata/kernels/ngram.hpp
+@@ -21,6 +21,8 @@
+ //
+ // All of those are asserted observable in `ple_parity.cpp` rather than trusted.
+ #pragma once
++#include "strata/ngram/ple_disk_options.hpp"
++#include <vector>
+ 
+ #include <cstdint>
+ #include <string>
+@@ -162,6 +164,7 @@ struct PleIoOptions {
+     /// (see PleReader::set_keepalive).
+     double keepalive_ms = 0;
+     double keepalive_window_s = 60;
++    std::vector<strata::ngram::PleDiskLocation> disk_cache; ///< optional process-local page cache roots
+ };
+ 
+ /// The PLE table.  Held by pointer-to-impl so this header does not drag `<windows.h>` into every
+diff --git a/include/strata/ngram/ple_disk_cache.hpp b/include/strata/ngram/ple_disk_cache.hpp
+new file mode 100644
+index 000000000..9c2d6e211
+--- /dev/null
++++ b/include/strata/ngram/ple_disk_cache.hpp
+@@ -0,0 +1,259 @@
++// Optional process-local second-level cache for immutable PLE source pages.
++// Data lives on disk; only tags/checksums and one page of scratch live in RAM.
++#pragma once
++#include "strata/ngram/ple_disk_options.hpp"
++#include <algorithm>
++#include <atomic>
++#include <memory>
++#include <mutex>
++#include <cerrno>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <filesystem>
++#include <limits>
++#include <string>
++#include <vector>
++#if defined(__linux__)
++#include <fcntl.h>
++#include <sys/file.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#endif
++
++namespace strata::ngram {
++
++class PleDiskCache {
++public:
++    static constexpr uint64_t page_bytes = 4096;
++    static constexpr uint64_t chunk_bytes = 256ull << 20; // below FAT32's 4 GiB limit
++    struct Stats { uint64_t hits = 0, misses = 0, writes = 0, corrupt = 0, failures = 0; };
++    PleDiskCache() = default;
++    PleDiskCache(const PleDiskCache&) = delete;
++    PleDiskCache& operator=(const PleDiskCache&) = delete;
++    ~PleDiskCache() { close(); }
++
++    bool open(const std::vector<PleDiskLocation>& locations, std::string& error) {
++        close(); stats_.reset();
++#if defined(__linux__)
++        try {
++            for (const auto& loc : locations) {
++                if (!loc.mib) continue;
++                if (loc.mib > 1048576) return fail_open("capacity exceeds 1 TiB per directory", error);
++                std::error_code ec;
++                if (!std::filesystem::is_directory(loc.path, ec) || ec)
++                    return fail_open("cache directory must already exist on the mounted drive", error);
++                Root root;
++                root.path = std::filesystem::canonical(loc.path, ec).string();
++                if (ec) return fail_open("cannot resolve cache directory", error);
++                struct stat st{};
++                if (::lstat(root.path.c_str(), &st) || !S_ISDIR(st.st_mode) ||
++                    st.st_uid != ::geteuid() || (st.st_mode & 0022))
++                    return fail_open("cache directory must be owned by this user and not writable by others", error);
++                roots_.push_back(std::move(root));
++                Root& r = roots_.back();
++                r.lock = ::open((r.path + "/.ple.lock").c_str(), O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
++                if (r.lock < 0 || ::flock(r.lock, LOCK_EX | LOCK_NB))
++                    return fail_open("cache directory is locked or inaccessible", error);
++                for (const auto& entry : std::filesystem::directory_iterator(r.path)) {
++                    const std::string name = entry.path().filename().string();
++                    if (name.rfind("ple-run-", 0) == 0 && !entry.is_symlink()) {
++                        std::filesystem::remove_all(entry.path(), ec);
++                        if (ec) return fail_open("cannot remove stale process cache", error);
++                    }
++                }
++                std::string pattern = r.path + "/ple-run-XXXXXX";
++                std::vector<char> temp(pattern.begin(), pattern.end()); temp.push_back(0);
++                if (!::mkdtemp(temp.data())) return fail_open("cannot create process cache", error);
++                r.run = temp.data();
++                r.slots = loc.mib * (1ull << 20) / page_bytes;
++                if (r.slots > UINT32_MAX) return fail_open("too many cache pages", error);
++                r.entries.resize((size_t) r.slots);
++                // Equal-budget roots are striped. Each root gets an independent hash table and byte cap.
++                std::fprintf(stderr, "strata PLE disk cache: %s budget=%llu MiB, process-local, 256 MiB chunks\n",
++                             r.path.c_str(), (unsigned long long) loc.mib);
++            }
++            enabled_ = !roots_.empty();
++            return enabled_;
++        } catch (const std::exception& e) { return fail_open(e.what(), error); }
++#else
++        (void) locations; error = "PLE disk cache requires Linux"; return false;
++#endif
++    }
++    void close() noexcept {
++#if defined(__linux__)
++        if (!roots_.empty()) log();
++        enabled_ = false;
++        for (auto& r : roots_) {
++            for (int fd : r.files) if (fd >= 0) ::close(fd);
++            std::error_code ec;
++            if (!r.run.empty()) std::filesystem::remove_all(r.run, ec);
++            if (r.lock >= 0) { ::flock(r.lock, LOCK_UN); ::close(r.lock); }
++        }
++        roots_.clear();
++#endif
++    }
++    void abandon(const char* reason) {
++#if defined(__linux__)
++        disable(reason);
++#else
++        (void) reason;
++#endif
++    }
++    bool enabled() const { return enabled_; }
++    uint64_t metadata_bytes() const {
++        uint64_t n = 0;
++#if defined(__linux__)
++        for (const auto& r : roots_) n += r.entries.size() * sizeof(Entry);
++#endif
++        return n;
++    }
++    Stats stats() const { return {stats_.hits.load(), stats_.misses.load(), stats_.writes.load(), stats_.corrupt.load(), stats_.failures.load()}; }
++    void log() const {
++        const auto counters = stats();
++        std::fprintf(stderr, "strata PLE disk cache: hits=%llu misses=%llu writes=%llu corrupt=%llu failures=%llu metadata=%llu KiB\n",
++                     (unsigned long long) counters.hits, (unsigned long long) counters.misses,
++                     (unsigned long long) counters.writes, (unsigned long long) counters.corrupt,
++                     (unsigned long long) counters.failures, (unsigned long long) (metadata_bytes() >> 10));
++    }
++    // Cheap lookup before queueing I/O. A fill holding the stripe is a miss, never a stall for source reads.
++    bool may_contain(uint64_t offset, uint32_t length) {
++#if defined(__linux__)
++        if (!enabled_ || offset % page_bytes || !length || length % page_bytes) return false;
++        for (uint32_t at = 0; at < length; at += page_bytes) {
++            const uint64_t page = (offset + at) / page_bytes;
++            Root& r = roots_[page % roots_.size()];
++            const size_t index = entry_index(r, page);
++            std::unique_lock<std::mutex> guard(r.stripes[index % 1024], std::try_to_lock);
++            if (!guard.owns_lock() || r.entries[index].page != page) { ++stats_.misses; return false; }
++        }
++        return true;
++#else
++        (void) offset; (void) length; return false;
++#endif
++    }
++    // The caller owns an aligned buffer. `bytes` preserves EOF short reads from the immutable source.
++    bool read(uint64_t offset, uint32_t length, uint8_t* dst, uint32_t& bytes) {
++        bytes = 0;
++#if defined(__linux__)
++        if (!enabled_ || offset % page_bytes || !length || length % page_bytes) return false;
++        for (uint32_t at = 0; at < length; at += page_bytes) {
++            const uint64_t page = (offset + at) / page_bytes;
++            Root& r = roots_[page % roots_.size()];
++            const size_t index = entry_index(r, page);
++            std::lock_guard<std::mutex> guard(r.stripes[index % 1024]);
++            Entry& e = r.entries[index];
++            if (e.page != page) { ++stats_.misses; return false; }
++            const int fd = file(r, e.physical, false);
++            if (fd < 0 || !transfer(fd, dst + at, page_bytes, slot_offset(e.physical), false)) {
++                disable("cache read failed; using source"); return false;
++            }
++            if (checksum(dst + at) != e.checksum) {
++                e.page = empty; ++stats_.corrupt; ++stats_.misses;
++                std::fprintf(stderr, "strata PLE disk cache: checksum mismatch; using source\n");
++                return false;
++            }
++            bytes += e.bytes;
++            if (e.bytes < page_bytes) break;
++        }
++        ++stats_.hits;
++        if ((stats_.hits.load() & 65535) == 0) log();
++        return true;
++#else
++        (void) offset; (void) length; (void) dst; return false;
++#endif
++    }
++    void write(uint64_t offset, uint32_t bytes, const uint8_t* src) {
++#if defined(__linux__)
++        if (!enabled_ || offset % page_bytes) return;
++        for (uint32_t at = 0; at < bytes; at += page_bytes) {
++            const uint64_t page = (offset + at) / page_bytes;
++            Root& r = roots_[page % roots_.size()];
++            const size_t index = entry_index(r, page);
++            std::lock_guard<std::mutex> guard(r.stripes[index % 1024]);
++            Entry& e = r.entries[index];
++            if (e.page == page) continue;
++            if (e.physical == UINT32_MAX) {
++                std::lock_guard<std::mutex> files_guard(*r.file_mu);
++                e.physical = (uint32_t) r.allocated++;
++            }
++            e.page = empty; // publish the tag only after the entire page is written
++            const uint32_t n = std::min<uint32_t>(page_bytes, bytes - at);
++            alignas(4096) uint8_t scratch_[4096];
++            std::memcpy(scratch_, src + at, n);
++            if (n < page_bytes) std::memset(scratch_ + n, 0, page_bytes - n);
++            const int fd = file(r, e.physical, true);
++            if (fd < 0 || !transfer(fd, scratch_, page_bytes, slot_offset(e.physical), true)) {
++                disable("cache write failed or drive full; using source"); return;
++            }
++            e.checksum = checksum(scratch_); e.bytes = (uint16_t) n; e.page = page;
++            ++stats_.writes;
++        }
++#else
++        (void) offset; (void) bytes; (void) src;
++#endif
++    }
++private:
++    std::atomic<bool> enabled_{false};
++    struct Counters {
++        std::atomic<uint64_t> hits{0}, misses{0}, writes{0}, corrupt{0}, failures{0};
++        void reset() { hits = 0; misses = 0; writes = 0; corrupt = 0; failures = 0; }
++    } stats_;
++#if defined(__linux__)
++    static constexpr uint64_t empty = UINT64_MAX;
++    struct Entry { uint64_t page = empty; uint32_t physical = UINT32_MAX, checksum = 0; uint16_t bytes = 0; };
++    struct Root {
++        std::string path, run;
++        int lock = -1;
++        uint64_t slots = 0, allocated = 0;
++        std::vector<Entry> entries;
++        std::vector<int> files;
++        std::unique_ptr<std::mutex> file_mu = std::make_unique<std::mutex>();
++        std::unique_ptr<std::mutex[]> stripes = std::make_unique<std::mutex[]>(1024);
++    };
++    std::vector<Root> roots_;
++    size_t entry_index(const Root& r, uint64_t page) const {
++        uint64_t x = page / roots_.size();
++        x *= 0x9E3779B97F4A7C15ull; x ^= x >> 29;
++        return (size_t) (x % r.slots);
++    }
++    static uint64_t slot_offset(uint32_t slot) { return (uint64_t) slot * page_bytes % chunk_bytes; }
++    static uint32_t checksum(const uint8_t* p) {
++        uint32_t h = 2166136261u;
++        for (uint32_t i = 0; i < page_bytes; ++i) h = (h ^ p[i]) * 16777619u;
++        return h;
++    }
++    int file(Root& r, uint32_t slot, bool create) {
++        std::lock_guard<std::mutex> guard(*r.file_mu);
++        const size_t chunk = (size_t) ((uint64_t) slot * page_bytes / chunk_bytes);
++        if (r.files.size() <= chunk) r.files.resize(chunk + 1, -1);
++        int& fd = r.files[chunk];
++        if (fd >= 0 || !create) return fd;
++        // Check space when opening each new 256 MiB chunk; never preallocate the whole budget.
++        std::error_code ec;
++        const auto space = std::filesystem::space(r.run, ec);
++        if (ec || space.available < chunk_bytes + (128ull << 20)) return -1;
++        const std::string path = r.run + "/pages-" + std::to_string(chunk) + ".bin";
++        fd = ::open(path.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_DIRECT, 0600);
++        // Some removable filesystems do not implement O_DIRECT. Refuse rather than filling the OS page cache.
++        return fd;
++    }
++    static bool transfer(int fd, uint8_t* p, uint32_t n, uint64_t offset, bool writing) {
++        // One aligned operation. A short transfer invalidates the entry; retrying a partial direct-I/O buffer
++        // would break alignment. EINTR before a transfer is safe to retry.
++        ssize_t done;
++        do { done = writing ? ::pwrite(fd, p, n, (off_t) offset) : ::pread(fd, p, n, (off_t) offset); }
++        while (done < 0 && errno == EINTR);
++        return done == n;
++    }
++    void disable(const char* reason) {
++        if (!enabled_.exchange(false)) return;
++        ++stats_.failures;
++        std::fprintf(stderr, "strata PLE disk cache: disabled: %s\n", reason);
++    }
++    bool fail_open(const std::string& why, std::string& out) {
++        out = "PLE disk cache: " + why; close(); return false;
++    }
++#endif
++};
++} // namespace strata::ngram
+diff --git a/include/strata/ngram/ple_disk_options.hpp b/include/strata/ngram/ple_disk_options.hpp
+new file mode 100644
+index 000000000..8209d7623
+--- /dev/null
++++ b/include/strata/ngram/ple_disk_options.hpp
+@@ -0,0 +1,8 @@
++#pragma once
++#include <cstdint>
++#include <string>
++
++namespace strata::ngram {
++// One independently bounded disk-cache directory. No platform I/O is pulled into GPU headers.
++struct PleDiskLocation { std::string path; uint64_t mib = 0; };
++}
+diff --git a/include/strata/ngram/ple_reader.hpp b/include/strata/ngram/ple_reader.hpp
+index 2884817ef..eaafcd38f 100644
+--- a/include/strata/ngram/ple_reader.hpp
++++ b/include/strata/ngram/ple_reader.hpp
+@@ -17,6 +17,7 @@
+ #pragma once
+ 
+ #include "strata/platform/direct_file.hpp"
++#include "strata/ngram/ple_disk_options.hpp"
+ 
+ #include <cstdint>
+ #include <string>
+@@ -29,6 +30,8 @@ inline constexpr uint32_t PAGE = 4096;
+ 
+ struct ReaderStats {
+     uint64_t requests = 0;        ///< rows asked for
++    uint64_t disk_hits = 0;       ///< page jobs served from the optional disk tier
++    uint64_t disk_bytes = 0;      ///< bytes served from the optional disk tier
+     uint64_t cache_hits = 0;      ///< rows served from the row cache
+     uint64_t dedup_rows = 0;      ///< rows that shared a page already being read in the same ticket
+     uint64_t reads = 0;           ///< SSD read requests issued
+@@ -60,7 +63,10 @@ public:
+     /// calls. false: the caller's thread does it (A/B arm).
+     /// `row_bytes`: one row's size in the file (90 IQ4_NL, 160 FP8), at most one page.
+     bool open(const std::string& path, uint64_t table_offset, uint64_t n_rows, uint32_t max_inflight,
+-              uint64_t cache_rows, std::string& err, bool io_thread = true, uint32_t row_bytes = ROW_BYTES);
++              uint64_t cache_rows, std::string& err, bool io_thread = true, uint32_t row_bytes = ROW_BYTES,
++              const std::vector<PleDiskLocation>& disk_cache = {});
++    /// After collecting all tickets, wait for optional background cache fills (validation/measurement).
++    void flush_disk_cache();
+     uint32_t row_bytes() const;
+     void close();
+     bool is_open() const;
+diff --git a/src/core/conversation_cache_test.cpp b/src/core/conversation_cache_test.cpp
+index 7c4dba46d..04c9d1307 100644
+--- a/src/core/conversation_cache_test.cpp
++++ b/src/core/conversation_cache_test.cpp
+@@ -22,6 +22,28 @@ SavedConversation image(std::initializer_list<int32_t> ids, bool cvec = true) {
+ }
+ 
+ int main() {
++    {
++        ConversationCache cache(1u << 20, 1);
++        std::vector<int32_t> spilled;
++        cache.set_eviction_sink([&](SavedConversation&& s) {
++            check(cache.size() == 0 && cache.bytes() == 0, "spill ownership is outside RAM accounting");
++            spilled.push_back(s.live.ids.front());
++        });
++        check(cache.put(image({1,2,3})), "tier first entry in RAM");
++        check(spilled.empty(), "RAM capacity used before spill");
++        auto match = cache.best(std::vector<int32_t>{1,2,3,4}, {}, true);
++        cache.guard(match.serial);
++        check(!cache.make_room(1) && spilled.empty(), "guarded donor never spills");
++        cache.external_park_succeeded(); check(!cache.guard_blocked(), "disk fallback satisfies guarded park");
++        cache.unguard();
++        check(cache.put(image({4,5,6})), "next RAM entry spills oldest");
++        check(spilled == std::vector<int32_t>{1}, "LRU ownership reaches slower tier");
++        cache.clear(); check(spilled.size() == 1, "poison/explicit clear never spills");
++        cache.set_eviction_sink([](SavedConversation&&) { throw 1; });
++        check(cache.put(image({7,8})), "entry before failed spill");
++        check(cache.put(image({9,10})), "failed optional spill still releases RAM");
++    }
++
+     {
+         ConversationBuffer bytes;
+         const size_t first = ConversationBuffer::segment_bytes + 17;
+diff --git a/src/core/conversation_disk_test.cpp b/src/core/conversation_disk_test.cpp
+new file mode 100644
+index 000000000..dd7c2d434
+--- /dev/null
++++ b/src/core/conversation_disk_test.cpp
+@@ -0,0 +1,67 @@
++#include "strata/core/conversation_disk.hpp"
++#include <fstream>
++#include <sys/wait.h>
++#include <cstdlib>
++using namespace strata::core;
++namespace fs = std::filesystem;
++void check(bool ok, const char* msg) { if (!ok) { std::fprintf(stderr, "FAIL: %s\n", msg); std::exit(1); } }
++int main() {
++    const auto root = fs::temp_directory_path() / ("strata-disk-test-" + std::to_string(getpid()));
++    fs::remove_all(root); fs::create_directory(root); fs::permissions(root, fs::perms::owner_all);
++    fs::create_directory(root / "run-stale"); std::ofstream(root / "run-stale" / "partial") << "garbage";
++    std::string error;
++    auto writer = [](const std::string& file, size_t, size_t& bytes, std::string&) {
++        std::ofstream f(file); f << std::string(16, 'x'); bytes = 16; return bool(f);
++    };
++    std::vector<int32_t> a(60001, 1), b(60001, 2), c(60001, 3);
++    {
++        ConversationDiskCache cache;
++        check(cache.open(root.string(), 64, 60001, error), "open");
++        check(!fs::exists(root / "run-stale"), "clean stale run");
++        check(!cache.wants(60000) && cache.wants(60001), "60000/60001 boundary");
++        check(!cache.store(std::vector<int32_t>(60000), {}, {}, true, 2, 32, writer, error), "short not stored");
++        check(cache.store(a, {}, {}, true, 2, 32, writer, error), "store two stages");
++        check(cache.size() == 1 && cache.bytes() == 32, "atomic group bytes");
++        auto more_a = a; more_a.push_back(9);
++        auto ma = cache.best(more_a, {}, true);
++        check(ma.tokens == 60001 && ma.live, "resume live prefix");
++        check(!cache.best(more_a, {}, false).tokens, "steering isolation");
++        check(!cache.best(more_a, {{1,77}}, true).tokens, "image isolation");
++        check(cache.store(b, {}, {}, true, 2, 32, writer, error), "store B");
++        cache.touch(ma.serial);
++        check(cache.store(c, {}, {}, true, 2, 32, writer, error), "store C evicts B");
++        auto more_b = b; more_b.push_back(9);
++        check(cache.best(more_a, {}, true).tokens && !cache.best(more_b, {}, true).tokens, "LRU uses last access");
++        auto failure = [&](const std::string& f, size_t k, size_t& n, std::string& e) {
++            if (k) { e = "injected second stage write failure"; return false; }
++            return writer(f,k,n,e);
++        };
++        cache.clear();
++        check(!cache.store(a, {}, {}, true, 2, 32, failure, error) && cache.size() == 0, "partial group not published");
++        for (const auto& item : fs::directory_iterator(root / ("run-" + std::to_string(getpid()))))
++            check(false, "partial files cleaned");
++        check(cache.store(a, {}, {}, true, 2, 32, writer, error), "store before guard");
++        check(cache.store(b, {}, {}, true, 2, 32, writer, error), "store B before guard");
++        cache.guard(cache.best(more_a, {}, true).serial);
++        check(!cache.store(c, {}, {}, true, 2, 64, writer, error), "guard keeps incoming files");
++        cache.unguard();
++        ConversationDiskCache other; std::string why;
++        check(!other.open(root.string(),64,60001,why), "second engine cannot purge active cache");
++        check(cache.best(more_a, {}, true).tokens, "locked cache remains usable");
++    }
++    check(!fs::exists(root / ("run-" + std::to_string(getpid()))), "normal shutdown cleans run");
++    // A process killed by _exit skips destructors. The next lock owner discards its files.
++    auto child = fork();
++    if (!child) {
++        ConversationDiskCache cache; std::string why;
++        if (!cache.open(root.string(),64,60001,why) || !cache.store(a,{}, {},true,2,32,writer,why)) _exit(1);
++        _exit(0);
++    }
++    int status = 0; waitpid(child,&status,0); check(status == 0, "crashed child fixture");
++    {
++        ConversationDiskCache cache; check(cache.open(root.string(),64,60001,error), "restart after crash");
++        check(cache.size() == 0 && !fs::exists(root / ("run-" + std::to_string(child))), "crash cache discarded");
++    }
++    fs::remove_all(root);
++    std::puts("conversation_disk_test passed");
++}
+diff --git a/src/core/conversation_file.cpp b/src/core/conversation_file.cpp
+index 24291be55..0d8103ed3 100644
+--- a/src/core/conversation_file.cpp
++++ b/src/core/conversation_file.cpp
+@@ -410,6 +410,7 @@ public:
+         while (n) {
+             const ssize_t r = ::pread(fd_, p, n, (off_t) offset);
+             if (r < 0 && errno == EINTR) continue;
++            if (r < 0 && errno == EINVAL && direct_ && leave_direct()) continue;
+             if (r <= 0) { kind_ = r < 0 ? errno_kind(errno) : SessionError::io; error_ = r < 0 ? std::strerror(errno) : "file ends early"; return false; }
+             p += r; n -= (size_t) r; offset += (uint64_t) r;
+         }
+@@ -646,7 +647,7 @@ struct Out {
+     template<class T> void vec(const std::vector<T>& v) { u64(v.size()); raw(v.data(), v.size() * sizeof(T)); }
+     void buffer(const ConversationBuffer& b) {
+         u64(b.size());
+-        b.visit(0, b.size(), [&](const uint8_t* p, size_t c, size_t) { raw(p, c); return ok; });
++        if (!b.visit(0, b.size(), [&](const uint8_t* p, size_t c, size_t) { raw(p, c); return ok; })) ok = false;
+     }
+     // a K/V part pulled from its owner straight into the file block (sizing pass: counted, never read)
+     void source(const SessionKvSource& s, size_t part) {
+@@ -716,6 +717,17 @@ struct In {
+     const SessionReadLimits& limits;
+     SessionError kind = SessionError::invalid;
+     size_t kv_layer = 0;
++    std::shared_ptr<RawFile> backing;
++    uint64_t payload_size = 0;
++    bool admit_array(uint64_t bytes) {
++        if (!limits.stream_kv || !limits.admit) return true;
++        std::string why;
++        constexpr uint64_t overhead = 2 * kBlock + (1 << 20);
++        if (bytes > UINT64_MAX - overhead) return fail("streamed allocation size overflow");
++        if (limits.admit(bytes + overhead, why)) return true;
++        kind = SessionError::memory;
++        return fail(why);
++    }
+     bool fail(const std::string& m) { if (error.empty()) error = "session file: " + m; return false; }
+     bool raw(void* p, size_t c) {
+         if (c > left) return fail("payload ends early");
+@@ -738,6 +750,7 @@ struct In {
+     template<class T> bool vec(std::vector<T>& v, uint64_t limit = UINT64_MAX) {
+         uint64_t n = 0;
+         if (!count(n, sizeof(T), limit)) return false;
++        if (!admit_array(n * sizeof(T))) return false;
+         v.resize((size_t) n);
+         return raw(v.data(), (size_t) n * sizeof(T));
+     }
+@@ -746,6 +759,19 @@ struct In {
+         const uint64_t limit = kv_layer < limits.max_kv_bytes.size() ? limits.max_kv_bytes[kv_layer][part] : UINT64_MAX;
+         if (!count(n, 1, limit)) return false;
+         b = {};
++        if (limits.stream_kv) {
++            const uint64_t offset = kHeader + payload_size - left;
++            std::vector<uint8_t> block(std::min<uint64_t>(n, kBlock));
++            for (uint64_t at = 0; at < n;) {
++                const size_t c = (size_t) std::min<uint64_t>(n - at, kBlock);
++                if (!raw(block.data(), c)) return false;
++                at += c;
++            }
++            b.file_backed((size_t) n, [file = backing, offset](size_t at, void* p, size_t c) {
++                return file->read_at(offset + at, static_cast<uint8_t*>(p), c);
++            });
++            return true;
++        }
+         b.resize((size_t) n);
+         return b.visit(0, b.size(), [&](uint8_t* p, size_t c, size_t) { return raw(p, c); });
+     }
+@@ -1176,7 +1202,8 @@ bool read_impl(const std::string& path, const SessionFileIdentity& id, SavedConv
+     error.clear();
+     st = {};
+     st.error = SessionError::invalid;   // every refusal below, unless the step says otherwise
+-    RawFile raw;
++    auto backing = std::make_shared<RawFile>();
++    RawFile& raw = *backing;
+     uint64_t size = 0;
+     if (!raw.open_session(path, size)) {
+         st.error = raw.refused() ? SessionError::invalid : raw.kind();
+@@ -1215,7 +1242,7 @@ bool read_impl(const std::string& path, const SessionFileIdentity& id, SavedConv
+     }
+     if (limits.admit) {
+         std::string why;
+-        if (!limits.admit(session_read_peak_bytes(size), why)) {
++        if (!limits.admit(limits.stream_kv ? 2 * kBlock + (1 << 20) : session_read_peak_bytes(size), why)) {
+             st.error = SessionError::memory;
+             error = "session file: " + why;
+             return false;
+@@ -1223,6 +1250,7 @@ bool read_impl(const std::string& path, const SessionFileIdentity& id, SavedConv
+     }
+     SavedConversation parsed;
+     In in{&f, SessionHasher(0), payload, error, limits};
++    in.backing = backing; in.payload_size = payload;
+     if (!get_payload(in, parsed)) { st.error = in.kind; return false; }
+     if (in.left) { error = "session file: payload has " + std::to_string(in.left) + " unparsed bytes"; return false; }
+     uint8_t t[kTrailer];
+diff --git a/src/core/conversation_file_test.cpp b/src/core/conversation_file_test.cpp
+index fd85f2cab..e0994d943 100644
+--- a/src/core/conversation_file_test.cpp
++++ b/src/core/conversation_file_test.cpp
+@@ -164,6 +164,50 @@ int main() {
+     check(session_file_write(good.string(), original, id, written, error), "write succeeds");
+     check(error.empty(), "write leaves no error");
+ 
++    // Bounded disk reads keep payloads in their original open file, validated before GPU transfer.
++    {
++        SessionReadLimits limits; limits.stream_kv = true;
++        size_t largest_admission = 0;
++        limits.admit = [&](uint64_t n, std::string&) { largest_admission = std::max<uint64_t>(largest_admission, n); return true; };
++        SavedConversation streamed; size_t n = 0;
++        check(session_file_read(good.string(), id, streamed, n, error, limits), "streamed read succeeds");
++        check(same(original, streamed), "streamed read equals original");
++        check(streamed.kv.front().k.is_file_backed(), "KV has disk backing");
++        const auto moved = dir / "renamed-stream.bin";
++        fs::rename(good, moved);
++        check(same(original, streamed), "streamed buffers own original open handle after rename");
++        fs::rename(moved, good);
++        auto damaged = slurp(good); damaged[damaged.size()/2] ^= 1;
++        const auto corrupt = dir / "stream-corrupt.bin"; spit(corrupt, damaged);
++        SavedConversation keep = original;
++        check(!session_file_read(corrupt.string(), id, keep, n, error, limits), "streaming rejects corrupt payload");
++        check(same(keep, original), "streaming refusal leaves output untouched");
++        limits.admit = [](uint64_t, std::string& why) { why = "test RAM refusal"; return false; };
++        check(!session_file_read(good.string(), id, keep, n, error, limits), "streaming respects RAM floor");
++        fs::remove(corrupt);
++    }
++    {
++        auto meta = original; meta.kv.clear();
++        SessionKvSource src;
++        src.format = 3; src.cells = 65; src.heads = 1; src.head_dim = 64; src.page_size = 4;
++        src.sizes[0] = (65u << 20) + 7;
++        src.read = [](size_t, size_t, void* dst, size_t n) { std::memset(dst, 0x5a, n); return true; };
++        const auto path = dir / "bounded-large.bin";
++        size_t n = 0;
++        check(session_file_write(path.string(), meta, std::vector<SessionKvSource>{src}, id, n, error),
++              "large streamed fixture");
++        SessionReadLimits limits; limits.stream_kv = true;
++        uint64_t largest = 0;
++        limits.admit = [&](uint64_t bytes, std::string&) { largest = std::max(largest, bytes); return bytes < (40u << 20); };
++        SavedConversation back;
++        check(session_file_read(path.string(), id, back, n, error, limits), "65 MiB KV fits bounded RAM read");
++        check(largest < (40u << 20) && back.kv[0].k.bytes() < 1024, "no full host KV allocation");
++        std::array<uint8_t, 17> part{};
++        check(back.kv[0].k.read(part.data(), (16u << 20) - 3, part.size()) &&
++              std::all_of(part.begin(), part.end(), [](auto x) { return x == 0x5a; }), "bounded read crosses a chunk boundary");
++        fs::remove(path);
++        check(back.kv[0].k.read(part.data(), 123, part.size()), "open file backing survives unlink");
++    }
+     // golden: format v1 is frozen. The fixed sample must give these exact bytes (little-endian header fields at
+     // fixed offsets, and a fixed hash of the whole file); a format change must bump the version and this test.
+     {
+diff --git a/src/core/conversation_persistent_test.cpp b/src/core/conversation_persistent_test.cpp
+new file mode 100644
+index 000000000..b73ffc594
+--- /dev/null
++++ b/src/core/conversation_persistent_test.cpp
+@@ -0,0 +1,79 @@
++#include "strata/core/conversation_disk.hpp"
++#include "strata/core/conversation_file.hpp"
++#include <fstream>
++#include <sys/wait.h>
++using namespace strata::core;
++namespace fs=std::filesystem;
++static void check(bool b,const char* m){if(!b){std::fprintf(stderr,"FAIL %s\n",m);std::exit(1);}}
++static SavedConversation sample(int token) {
++    SavedConversation s;s.live.ids.assign(32,token);s.live.gdn.assign(128,(uint8_t)token);
++    s.checkpoints.push_back(s.live);s.checkpoints.back().ids.resize(31);s.layer_hi=24;
++    ConversationKv kv;kv.format=4;kv.cells=32;kv.heads=1;kv.head_dim=32;kv.page_size=32;
++    kv.k.resize(1024,token);kv.v.resize(512,token+1);s.kv.push_back(std::move(kv));
++    auto part=s;part.layer_lo=24;part.layer_hi=48;part.kv.push_back(part.kv[0]);s.stage_images.push_back(std::move(part));return s;
++}
++int main(){
++ const auto root=fs::temp_directory_path()/("strata-persistent-test-"+std::to_string(getpid()));
++ fs::create_directory(root);fs::permissions(root,fs::perms::owner_all);
++ const SessionFileIdentity identity{123,456};std::string error;uint64_t serial=0;const uint64_t key=99;
++ auto save=[&](ConversationDiskCache& c,int token,bool mirror=true){
++  auto s=sample(token);
++  return c.store(s.live.ids,s.live.imgs,s.checkpoints,true,2,1u<<20,
++   [&](const std::string& file,size_t k,size_t& n,std::string& e){return session_file_write(file,k?s.stage_images[0]:s,identity,n,e);},error,mirror);
++ };
++ {
++  ConversationDiskCache c;check(c.open(root.string(),4u<<20,60001,error,true,key,32768),"open persistent");
++  check(!save(c,1,false),"short disk-only excluded");check(save(c,1),"short RAM mirror saved despite spill minimum");
++  serial=c.best(std::vector<int32_t>(33,1),{},true).serial;check(serial!=0,"mirror match");
++  auto before=c.bytes();check(save(c,1)&&c.bytes()==before&&c.size()==1,"unchanged snapshot not rewritten");
++  ConversationDiskCache other;check(!other.open(root.string(),4u<<20,0,error,true,key),"exclusive lock");
++ }
++ check(fs::exists(root/"persistent"/std::to_string(serial)/"index.bin"),"survives clean close");
++ {
++  ConversationDiskCache c;check(c.open(root.string(),4u<<20,60001,error,true,key,32768)&&c.size()==1,"index after restart");
++  auto match=c.best(std::vector<int32_t>(33,1),{},true);auto e=c.find(match.serial);check(e&&e->files.size()==2,"both GPUs indexed");
++  for(size_t k=0;k<2;++k){SavedConversation loaded;size_t bytes=0;
++   check(session_file_read(e->files[k],identity,loaded,bytes,error),"validate payload after restart");
++   auto want=sample(1);auto& part=k?want.stage_images[0]:want;
++   check(loaded.live.ids==part.live.ids&&loaded.live.gdn==part.live.gdn&&loaded.kv.size()==part.kv.size(),"state and MTP restored");
++   for(size_t i=0;i<loaded.kv.size();++i)check(loaded.kv[i].k==part.kv[i].k&&loaded.kv[i].v==part.kv[i].v,"KV bytes exact");
++  }
++  c.touch(match.serial);check(save(c,2),"second entry");
++ }
++ // Missing stage is not registered even though its index exists.
++ fs::remove(root/"persistent"/std::to_string(serial)/"stage-1.bin");
++ {
++  ConversationDiskCache c;check(c.open(root.string(),4u<<20,0,error,true,key)&&c.size()==1,"missing GPU rejected");c.clear();
++ }
++ // Simulate death while writing the second GPU. No index publishes a partial group.
++ auto child=fork();if(!child){ConversationDiskCache c;std::string e;if(!c.open(root.string(),4u<<20,0,e,true,key))_exit(2);
++  c.store({1,2},{},{},true,2,1u<<20,[&](const std::string& path,size_t k,size_t& n,std::string&){if(k)_exit(0);std::ofstream(path)<<"partial";n=7;return true;},e);_exit(3);}
++ int status=0;waitpid(child,&status,0);check(status==0,"partial child exit");
++ {
++  ConversationDiskCache c;check(c.open(root.string(),4u<<20,0,error,true,key)&&c.size()==0,"orphan cleaned");
++ }
++ child=fork();if(!child){ConversationDiskCache c;if(!c.open(root.string(),4u<<20,0,error,true,key)||!save(c,3))_exit(2);_exit(0);}
++ waitpid(child,&status,0);check(status==0,"committed child exit");
++ {
++  ConversationDiskCache c;check(c.open(root.string(),4u<<20,0,error,true,key)&&c.size()==1,"committed group survives abrupt exit");
++ }
++ {
++  ConversationDiskCache c;check(c.open(root.string(),4u<<20,0,error,true,key+1)&&c.size()==0,"different identity discarded");check(save(c,4),"new identity");
++ }
++ // A corrupted or truncated index is only a cache miss.
++ for(const auto& dir:fs::directory_iterator(root/"persistent"))std::ofstream(dir.path()/"index.bin",std::ios::trunc)<<"bad";
++ {
++  ConversationDiskCache c;check(c.open(root.string(),4u<<20,0,error,true,key+1)&&c.size()==0,"bad index discarded");
++ }
++ // LRU counts metadata bytes and honours touches across restarts (small, synthetic stage files).
++ auto tiny=[&](ConversationDiskCache& c,int token){return c.store({token},{},{},true,2,256,
++  [](const std::string& path,size_t,size_t& n,std::string&){std::ofstream(path)<<std::string(16,'x');fs::permissions(path,fs::perms::owner_read|fs::perms::owner_write);n=16;return true;},error,true);};
++ uint64_t keep=0;
++ {ConversationDiskCache c;check(c.open(root.string(),700,0,error,true,key),"tiny open");
++  check(tiny(c,1)&&tiny(c,2)&&tiny(c,3),"tiny entries");keep=c.best(std::vector<int32_t>{1,9},{},true).serial;c.touch(keep);}
++ {ConversationDiskCache c;check(c.open(root.string(),700,0,error,true,key),"tiny restart");
++  check(c.find(keep)&&c.find(keep)->live.ids[0]==1,"old entry indexed before new store");
++  check(tiny(c,4)&&c.bytes()<=700,"capacity bounded including index");
++  check(c.find(keep)&&c.find(keep)->live.ids[0]==1,"LRU touch survives restart");c.clear();}
++ fs::remove_all(root);std::puts("persistent KV index: restart, mirrors, two stages/MTP bytes, crash/partial, identity, corruption, LRU PASS");
++}
+diff --git a/src/core/conversation_snapshot_test.cpp b/src/core/conversation_snapshot_test.cpp
+index c0eee8a17..0d3e32bd2 100644
+--- a/src/core/conversation_snapshot_test.cpp
++++ b/src/core/conversation_snapshot_test.cpp
+@@ -191,6 +191,30 @@ void full_session(int fmt, int mode, int experts) {
+               x.checkpoints.size()==y.checkpoints.size() && equal(x.kv[0],y.kv[0]) && equal(x.kv.back(),y.kv.back()),
+               "streamed file equals captured file");
+         check(slurp(p1)==slurp(p2),"streamed file is byte-identical to the captured file");
++        SessionReadLimits limits;
++        limits.stream_kv = true;
++        check(conversation_session_read_limits(limits,ss,g,draft.state,96,1,err), "bounded file read limits");
++        SavedConversation streamed;
++        check(session_file_read(p1,id,streamed,n1,err,limits), "bounded disk read");
++        check(conversation_snapshot_validate(streamed,ss,g,draft.state,err), "validate bounded disk snapshot");
++        fill(13);
++        check(conversation_snapshot_restore(streamed,ss,g,draft.state,err)==ConversationRestore::restored,
++              "restore from bounded disk buffers");
++        SavedConversation streamed_back;
++        check(snap_save(streamed_back,view,ss,g,draft.state,err), "capture streamed restore");
++        check(streamed_back.live.gdn==b.live.gdn && streamed_back.live.ple==b.live.ple &&
++              streamed_back.live.dead==b.live.dead && equal(streamed_back.kv[0],b.kv[0]) &&
++              equal(streamed_back.kv.back(),b.kv.back()), "disk restore exactness including draft ring");
++        // Pointer overload used by stages that do not own the draft.
++        SavedConversation stage_meta,stage_read;
++        std::vector<SessionKvSource> stage_sources;
++        check(conversation_snapshot_sources(stage_meta,stage_sources,view,ss,g,nullptr,err), "disk stage sources without draft");
++        check(stage_sources.size()+1==sources.size(), "no draft source in non-owner stage");
++        check(session_file_write(p2,stage_meta,stage_sources,id,n2,err), "write non-draft stage");
++        SessionReadLimits stage_limits; stage_limits.stream_kv=true;
++        check(conversation_session_read_limits(stage_limits,ss,g,nullptr,96,1,err), "non-draft stage limits");
++        check(session_file_read(p2,id,stage_read,n2,err,stage_limits) &&
++              conversation_snapshot_validate(stage_read,ss,g,nullptr,err), "validate disk non-draft stage");
+         std::error_code ec;
+         fs::remove_all(dir,ec);
+         auto empty_ids=std::vector<int32_t>{};
+diff --git a/src/core/conversation_state.cpp b/src/core/conversation_state.cpp
+index b02f066a0..06e406347 100644
+--- a/src/core/conversation_state.cpp
++++ b/src/core/conversation_state.cpp
+@@ -619,9 +619,14 @@ bool conversation_snapshot_save(SavedConversation& image, const ConversationView
+     return true;
+ }
+ 
++bool conversation_snapshot_sources(SavedConversation& meta, std::vector<SessionKvSource>& sources,
++        const ConversationView& view, const SessionState& ss, const ModelGeometry& g,
++        const QsaState& draft, std::string& error) {
++    return conversation_snapshot_sources(meta, sources, view, ss, g, &draft, error);
++}
+ bool conversation_snapshot_sources(SavedConversation& meta, std::vector<SessionKvSource>& sources,
+                                    const ConversationView& view, const SessionState& ss, const ModelGeometry& g,
+-                                   const QsaState& draft, std::string& error) {
++                                   const QsaState* draft, std::string& error) {
+     if (!view_validate(view, ss, g, error) || !sync(error)) return false;
+     SavedConversation captured;
+     captured.geometry = geometry_key(g);
+@@ -633,17 +638,21 @@ bool conversation_snapshot_sources(SavedConversation& meta, std::vector<SessionK
+     conversation_checkpoint_join(captured.live.gdn.data());
+     const int64_t upto = (int64_t) view.ids.size();
+     const size_t layers = owned_qsa(ss);
+-    std::vector<SessionKvSource> out(layers + 1);
++    std::vector<SessionKvSource> out(layers + (draft ? 1 : 0));
+     for (size_t j = 0; j < layers; ++j)
+         if (!conversation_kv_source(out[j], owned(ss, j), g, upto, true, error)) return false;
+-    if (!conversation_kv_source(out.back(), draft, g, upto, false, error)) return false;
++    if (draft && !conversation_kv_source(out.back(), *draft, g, upto, false, error)) return false;
+     meta = std::move(captured);
+     sources = std::move(out);
+     return true;
+ }
+ 
+ bool conversation_session_read_limits(SessionReadLimits& limits, const SessionState& ss, const ModelGeometry& g,
+-                                      const QsaState& draft, uint64_t max_tokens, uint64_t max_checkpoints,
++        const QsaState& draft, uint64_t max_tokens, uint64_t max_checkpoints, std::string& error) {
++    return conversation_session_read_limits(limits, ss, g, &draft, max_tokens, max_checkpoints, error);
++}
++bool conversation_session_read_limits(SessionReadLimits& limits, const SessionState& ss, const ModelGeometry& g,
++                                      const QsaState* draft, uint64_t max_tokens, uint64_t max_checkpoints,
+                                       std::string& error) {
+     ConversationStateSizes z;
+     if (!conversation_session_sizes(g, ss, z, error)) return false;
+@@ -657,18 +666,20 @@ bool conversation_session_read_limits(SessionReadLimits& limits, const SessionSt
+     SessionReadLimits l = limits;   // keeps the caller's admit / progress / max_file_bytes
+     l.max_tokens = tokens;
+     l.max_checkpoints = max_checkpoints;
+-    l.max_kv_layers = layers + 1;
++    l.max_kv_layers = layers + (draft ? 1 : 0);
+     l.geometry = geometry_key(g);
+     l.layer_range = std::make_pair(ss.layer_lo, ss.layer_hi);
+     l.max_state_bytes = {z.gdn, ss.ple_hist ? z.ple : 0, tails, dead, block_pos};
+-    l.max_kv_bytes.assign(layers + 1, {});
++    l.max_kv_bytes.assign(layers + (draft ? 1 : 0), {});
+     for (size_t j = 0; j < layers; ++j) {
+         const auto& st = owned(ss, j);
+         const int64_t upto = (int64_t) std::min<uint64_t>(tokens, (uint64_t) std::max<int64_t>(st.max_cells, 0));
+         if (!conversation_kv_part_sizes(st, g, upto, true, l.max_kv_bytes[j], error)) return false;
+     }
+-    const int64_t dupto = (int64_t) std::min<uint64_t>(tokens, (uint64_t) std::max<int64_t>(draft.max_cells, 0));
+-    if (!conversation_kv_part_sizes(draft, g, dupto, false, l.max_kv_bytes.back(), error)) return false;
++    if (draft) {
++        const int64_t dupto = (int64_t) std::min<uint64_t>(tokens, (uint64_t) std::max<int64_t>(draft->max_cells, 0));
++        if (!conversation_kv_part_sizes(*draft, g, dupto, false, l.max_kv_bytes.back(), error)) return false;
++    }
+     limits = std::move(l);
+     return true;
+ }
+diff --git a/src/core/conversation_tiers_test.cpp b/src/core/conversation_tiers_test.cpp
+new file mode 100644
+index 000000000..86b08413d
+--- /dev/null
++++ b/src/core/conversation_tiers_test.cpp
+@@ -0,0 +1,62 @@
++#include "strata/core/conversation_disk.hpp"
++#include "strata/core/conversation_file.hpp"
++#include <cstdio>
++#include <cstdlib>
++#include <filesystem>
++#include <stdexcept>
++#include <unistd.h>
++using namespace strata::core;
++namespace fs = std::filesystem;
++static void check(bool b,const char* msg) { if(!b){std::fprintf(stderr,"FAIL: %s\n",msg);std::exit(1);} }
++static SavedConversation sample(int token) {
++    SavedConversation s;
++    s.live.ids.assign(60001,token); s.live.gdn.assign(4096,(uint8_t)token);
++    s.checkpoints.push_back(s.live); s.checkpoints.back().ids.resize(60000);
++    s.layer_hi=24;
++    ConversationKv kv;kv.format=4;kv.cells=60001;kv.heads=2;kv.head_dim=256;kv.page_size=64;
++    kv.k.resize(8192,(uint8_t)token);kv.v.resize(4096,(uint8_t)(token+1));
++    s.kv.push_back(std::move(kv));
++    auto part=s;part.layer_lo=24;part.layer_hi=48;
++    // Stand-in for an owning stage's MTP K/V; the host format must preserve both layers.
++    part.kv.push_back(part.kv.front());s.stage_images.push_back(std::move(part));
++    return s;
++}
++int main(int argc,char** argv) {
++    auto parent=argc>1?fs::path(argv[1]):fs::temp_directory_path();
++    auto root=parent/("tiers-test-"+std::to_string(getpid()));fs::create_directory(root);fs::permissions(root,fs::perms::owner_all);
++    std::string error;const SessionFileIdentity id{123,456};
++    {
++        ConversationDiskCache disk;check(disk.open(root.string(),16u<<20,60001,error),"open disk");
++        ConversationCache ram(8u<<20,1);int attempts=0;bool fail=false;
++        ram.set_eviction_sink([&](SavedConversation&& image){
++            ++attempts;
++            const uint64_t estimate=image.bytes()+(2u<<20);
++            const bool ok=disk.store(image.live.ids,image.live.imgs,image.checkpoints,image.cvec,2,estimate,
++                [&](const std::string& path,size_t stage,size_t& bytes,std::string& why){
++                    if(fail&&stage==1){why="injected second-stage failure";return false;}
++                    SessionWriteOptions opts;opts.durable=false;opts.min_free_bytes=0;
++                    return session_file_write(path,stage?image.stage_images[stage-1]:image,id,bytes,why,opts);
++                },error);
++            check(ok!=fail,"all stages saved or failure stays a miss");
++        });
++        check(ram.put(sample(1)),"A parked in RAM");check(attempts==0&&disk.size()==0,"disk untouched while RAM fits");
++        check(ram.put(sample(2)),"B enters RAM");check(attempts==1&&disk.size()==1,"A spilled when RAM slot filled");
++        auto ids=std::vector<int32_t>(60001,1);ids.push_back(9);auto match=disk.best(ids,{},true);
++        check(match.tokens==60001,"A matches disk");const auto* entry=disk.find(match.serial);check(entry&&entry->files.size()==2,"two stage files");
++        SavedConversation loaded;
++        for(size_t k=0;k<2;++k){
++            SavedConversation part;size_t bytes=0;SessionReadLimits limits;limits.stream_kv=true;
++            check(session_file_read(entry->files[k],id,part,bytes,error,limits),"stream spilled stage");
++            auto expected=sample(1);const auto& want=k?expected.stage_images[0]:expected;
++            check(part.live.ids==want.live.ids&&part.live.gdn==want.live.gdn&&part.kv.size()==want.kv.size(),"running state and MTP layer count");
++            for(size_t i=0;i<part.kv.size();++i)check(part.kv[i].k==want.kv[i].k&&part.kv[i].v==want.kv[i].v,"exact KV bytes");
++            if(k)loaded.stage_images.push_back(std::move(part));else loaded=std::move(part);
++        }
++        // Promotion to RAM spills B. The streamed backing is kept valid while its directory is replaced/evicted.
++        check(ram.put(std::move(loaded)),"A promoted to RAM");check(attempts==2&&disk.size()==2,"B spilled on promotion");
++        ram.clear();check(attempts==2,"clear does not spill");disk.clear();
++        check(ram.put(sample(3)),"before failing spill");fail=true;
++        check(ram.put(sample(4)),"RAM remains usable after storage failure");check(disk.size()==0,"partial stage group never registered");
++    }
++    fs::remove_all(root);std::puts("RAM-first KV tiers: capacity spill, two stages/MTP bytes, streamed promotion, failed group and clear passed.");
++}
+diff --git a/src/kernels/ngram.cpp b/src/kernels/ngram.cpp
+index a81e34d66..aa50cce34 100644
+--- a/src/kernels/ngram.cpp
++++ b/src/kernels/ngram.cpp
+@@ -400,7 +400,7 @@ bool PleTable::open(const std::string& gguf_path, std::string& err, const PleIoO
+         impl_->file = nullptr;
+         impl_->data = nullptr;
+         if (!impl_->reader.open(gguf_path, table_offset, n_rows, io.max_inflight, io.cache_rows, err, io.io_thread,
+-                                impl_->rb)) {
++                                impl_->rb, io.disk_cache)) {
+             close();
+             return false;
+         }
+@@ -747,6 +747,12 @@ std::string PleTable::io_report() const {
+     if (s.keepalive_reads > 0 && n > 0 && n < (int) sizeof buf)
+         std::snprintf(buf + n, sizeof buf - (size_t) n, ", SSD kept awake by %llu reads (slowest %.1f ms)",
+                       (unsigned long long) s.keepalive_reads, s.keepalive_us_max / 1000.0);
++    if (s.disk_hits > 0) {
++        const size_t used = std::strlen(buf);
++        if (used < sizeof buf)
++            std::snprintf(buf + used, sizeof buf - used, ", disk-cache hits %llu (%.1f MB)",
++                          (unsigned long long) s.disk_hits, (double) s.disk_bytes / 1e6);
++    }
+     return buf;
+ }
+ 
+diff --git a/src/ngram/ple_disk_cache_test.cpp b/src/ngram/ple_disk_cache_test.cpp
+new file mode 100644
+index 000000000..974c087bf
+--- /dev/null
++++ b/src/ngram/ple_disk_cache_test.cpp
+@@ -0,0 +1,112 @@
++#include "strata/ngram/ple_reader.hpp"
++#include "strata/ngram/ple_disk_cache.hpp"
++#include <array>
++#include <cstdlib>
++#include <fstream>
++#include <iostream>
++#include <random>
++#include <sys/wait.h>
++#include <unistd.h>
++
++#define CHECK(expr) do { if (!(expr)) { std::cerr << "FAIL " << __FILE__ << ":" << __LINE__ << ": " << #expr << "\n"; std::exit(1); } } while (0)
++
++using namespace strata::ngram;
++namespace fs = std::filesystem;
++static fs::path temp(const fs::path& parent) {
++    std::string s = (parent / "ple-test-XXXXXX").string();
++    std::vector<char> p(s.begin(), s.end()); p.push_back(0);
++    char* result = ::mkdtemp(p.data()); CHECK(result); return result;
++}
++static fs::path chunk(const fs::path& root) {
++    for (const auto& r : fs::directory_iterator(root))
++        if (r.is_directory()) for (const auto& f : fs::directory_iterator(r.path()))
++            if (f.path().extension() == ".bin") return f.path();
++    return {};
++}
++static void core(const fs::path& a, const fs::path& b) {
++    alignas(4096) std::array<uint8_t, 8192> data{}, out{};
++    for (size_t i = 0; i < data.size(); ++i) data[i] = (uint8_t) (i * 31 + i / 4096);
++    std::string err; PleDiskCache c;
++    CHECK(c.open({{a.string(), 1}, {b.string(), 1}}, err));
++    uint32_t bytes;
++    CHECK(!c.read(0, 8192, out.data(), bytes));
++    c.write(0, 8192, data.data()); CHECK(c.enabled());
++    CHECK(c.read(0, 8192, out.data(), bytes)); CHECK(bytes == 8192 && out == data);
++    CHECK(!chunk(a).empty() && !chunk(b).empty());
++    PleDiskCache second;
++    CHECK(!second.open({{a.string(), 1}}, err)); // never clears another engine's pages
++    CHECK(c.read(0, 8192, out.data(), bytes));
++    // Corrupt a cached page. It must miss, then accept a freshly fetched source page.
++    { std::fstream f(chunk(a), std::ios::binary | std::ios::in | std::ios::out); char x = 42; f.write(&x, 1); }
++    CHECK(!c.read(0, 4096, out.data(), bytes)); CHECK(c.stats().corrupt == 1);
++    c.write(0, 4096, data.data()); CHECK(c.read(0, 4096, out.data(), bytes));
++    // EOF page: preserve valid length, zero padding, never invent source bytes.
++    c.write(2 * 4096, 90, data.data()); CHECK(c.read(2 * 4096, 4096, out.data(), bytes));
++    CHECK(bytes == 90 && !std::memcmp(out.data(), data.data(), 90));
++    // Saturate both byte budgets, forcing hashed eviction. No hit may return another page's bytes.
++    for (uint32_t p = 10; p < 1034; ++p) { std::memcpy(data.data(), &p, sizeof(p)); c.write((uint64_t) p * 4096, 4096, data.data()); }
++    for (uint32_t p = 10; p < 1034; ++p)
++        if (c.read((uint64_t) p * 4096, 4096, out.data(), bytes)) { uint32_t got; std::memcpy(&got, out.data(), 4); CHECK(got == p); }
++    for (const auto& root : {a,b}) {
++        uint64_t n = 0; for (auto const& x : fs::recursive_directory_iterator(root)) if (x.is_regular_file()) n += x.file_size();
++        CHECK(n <= 1ull << 20);
++    }
++    // A broken cache read disables only the tier. The source reader is still usable.
++    const auto file = chunk(a); fs::resize_file(file, 0);
++    for (uint32_t p = 10; p < 1034 && c.enabled(); ++p) c.read((uint64_t) p * 4096, 4096, out.data(), bytes);
++    CHECK(!c.enabled() && c.stats().failures == 1);
++    c.close(); CHECK(chunk(a).empty() && chunk(b).empty());
++    // Crash residue is discarded on the next exclusive open.
++    pid_t pid = ::fork(); CHECK(pid >= 0);
++    if (!pid) { PleDiskCache child; std::string why; if (!child.open({{a.string(), 1}}, why)) ::_exit(2); child.write(0, 4096, data.data()); ::_exit(0); }
++    int status; CHECK(::waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
++    CHECK(!chunk(a).empty()); CHECK(c.open({{a.string(), 1}}, err)); CHECK(chunk(a).empty()); c.close();
++    CHECK(!c.open({{a.string(), 1}, {a.string(), 1}}, err)); // duplicate root rejected
++    CHECK(c.open({{a.string(), 1}}, err)); c.close();
++}
++static void reader(const fs::path& base, const fs::path& a, const fs::path& b, uint32_t rb, bool threaded) {
++    const auto source = base / "source.bin";
++    const uint64_t offset = 192, rows = 2000;
++    std::vector<uint8_t> contents(offset + rows * rb);
++    std::mt19937 random(42); for (auto& x : contents) x = (uint8_t) random();
++    { std::ofstream f(source, std::ios::binary); f.write((char*) contents.data(), contents.size()); }
++    PleReader r; std::string err;
++    CHECK(r.open(source.string(), offset, rows, 16, 0, err, threaded, rb, {{a.string(), 2}, {b.string(), 2}}));
++    std::vector<uint32_t> ids{0, 1, 42, 43, 44, 45, 100, 1999, 2000, 77, 77};
++    for (uint32_t i = 0; i < 2000; ++i) ids.push_back(i); // more jobs than the in-flight limit
++    std::vector<uint8_t> out(ids.size() * rb);
++    for (int turn = 0; turn < 3; ++turn) {
++        auto t = r.issue(ids.data(), ids.size(), out.data()); CHECK(r.collect(t, err)); r.flush_disk_cache();
++        for (size_t i = 0; i < ids.size(); ++i) for (uint32_t j = 0; j < rb; ++j)
++            CHECK(out[i * rb + j] == (ids[i] < rows ? contents[offset + (uint64_t) ids[i] * rb + j] : 0));
++    }
++    CHECK(r.snapshot().disk_hits > 0 && r.snapshot().cache_hits == 0);
++    // Truncating the cache after warming it triggers a source fallback, with identical rows.
++    fs::resize_file(chunk(a), 0);
++    auto t = r.issue(ids.data(), ids.size(), out.data()); CHECK(r.collect(t, err)); r.flush_disk_cache();
++    for (size_t i = 0; i < ids.size(); ++i) for (uint32_t j = 0; j < rb; ++j)
++        CHECK(out[i * rb + j] == (ids[i] < rows ? contents[offset + (uint64_t) ids[i] * rb + j] : 0));
++    // Multiple outstanding tickets, collected out of issue order.
++    std::vector<uint8_t> other(out.size());
++    auto t1 = r.issue(ids.data(), ids.size(), out.data());
++    auto t2 = r.issue(ids.data(), ids.size(), other.data());
++    CHECK(r.collect(t2, err)); CHECK(r.collect(t1, err)); CHECK(other == out);
++    r.flush_disk_cache();
++    r.close();
++    // Close while reads are outstanding must drain both source and cache workers safely.
++    CHECK(r.open(source.string(), offset, rows, 16, 0, err, threaded, rb, {{a.string(), 2}, {b.string(), 2}}));
++    r.issue(ids.data(), ids.size(), out.data()); r.close();
++    // Invalid optional storage degrades to a source read, not an inference failure.
++    CHECK(r.open(source.string(), offset, rows, 16, 0, err, threaded, rb, {{source.string(), 2}}));
++    t = r.issue(ids.data(), ids.size(), out.data()); CHECK(r.collect(t, err)); r.flush_disk_cache(); r.close();
++    fs::remove(source);
++}
++int main(int argc, char** argv) {
++    const auto base = temp(fs::temp_directory_path());
++    const auto a = temp(argc > 1 ? fs::path(argv[1]) : base);
++    const auto b = temp(argc > 2 ? fs::path(argv[2]) : base);
++    core(a,b);
++    for (uint32_t rb : {90u,160u,320u}) for (bool threaded : {false,true}) reader(base,a,b,rb,threaded);
++    fs::remove_all(a); fs::remove_all(b); fs::remove_all(base);
++    std::cout << "PLE disk cache tests passed: two roots, bounded eviction, corruption, failure, crash cleanup, exact rows (90/160/320 B, worker/caller).\n";
++}
+diff --git a/src/ngram/ple_reader.cpp b/src/ngram/ple_reader.cpp
+index 6e108ac35..dce3aaad1 100644
+--- a/src/ngram/ple_reader.cpp
++++ b/src/ngram/ple_reader.cpp
+@@ -1,5 +1,6 @@
+ // src/ngram/ple_reader.cpp - see include/strata/ngram/ple_reader.hpp.
+ #include "strata/ngram/ple_reader.hpp"
++#include "strata/ngram/ple_disk_cache.hpp"
+ #include "strata/platform/aux_cpus.hpp"
+ 
+ #include <algorithm>
+@@ -71,6 +72,86 @@ struct RowCache {
+     }
+ };
+ 
++// Cache I/O has its own bounded queue. Reads overlap on both drives; fills never block a completed source read.
++// The model reader remains the only owner of slot/ticket state. Cache workers only touch their assigned buffers
++// and return completion records via the source file's wake channel.
++class DiskWorkers {
++public:
++    struct Done { uint32_t slot, bytes; bool hit; };
++    DiskWorkers(PleDiskCache& cache, DirectFile& source, uint32_t count) : cache_(cache), source_(source) {
++        try {
++            for (uint32_t i = 0; i < std::min<uint32_t>(16, count); ++i)
++                threads_.emplace_back([this] { run(); });
++        } catch (...) { stop(); throw; }
++    }
++    ~DiskWorkers() { stop(); }
++    bool read(uint64_t offset, uint32_t length, uint8_t* dst, uint32_t slot) {
++        try {
++            { std::lock_guard<std::mutex> lk(mu_); reads_.push_back(Task{offset,length,slot,dst,{}}); }
++            cv_.notify_one(); return true;
++        } catch (...) { cache_.abandon("cannot queue cache read; using source"); return false; }
++    }
++    void fill(uint64_t offset, uint32_t bytes, const uint8_t* data) {
++        try {
++            std::lock_guard<std::mutex> lk(mu_);
++            if (fill_bytes_ + bytes > (16u << 20) || !cache_.enabled()) return; // bounded optional fills
++            writes_.push_back(Task{offset,bytes,0,nullptr,std::vector<uint8_t>(data,data+bytes)});
++            fill_bytes_ += bytes; cv_.notify_one();
++        } catch (...) { cache_.abandon("cannot queue cache fill; using source"); }
++    }
++    std::vector<Done> completed() {
++        std::lock_guard<std::mutex> lk(mu_); std::vector<Done> out; out.swap(done_); return out;
++    }
++    void flush() {
++        std::unique_lock<std::mutex> lk(mu_);
++        idle_.wait(lk,[&]{return reads_.empty() && writes_.empty() && active_ == 0;});
++    }
++private:
++    struct Task { uint64_t offset; uint32_t bytes,slot; uint8_t* dst; std::vector<uint8_t> data; };
++    PleDiskCache& cache_;
++    DirectFile& source_;
++    std::mutex mu_;
++    std::condition_variable cv_,idle_;
++    std::deque<Task> reads_,writes_;
++    std::vector<Done> done_;
++    std::vector<std::thread> threads_;
++    bool stopping_ = false;
++    size_t active_ = 0, fill_bytes_ = 0;
++    void stop() {
++        { std::lock_guard<std::mutex> lk(mu_); stopping_ = true; }
++        cv_.notify_all();
++        for (auto& t : threads_) if (t.joinable()) t.join();
++        threads_.clear();
++    }
++    void run() {
++        for (;;) {
++            Task task;
++            {
++                std::unique_lock<std::mutex> lk(mu_);
++                cv_.wait(lk,[&]{return stopping_ || !reads_.empty() || !writes_.empty();});
++                if (reads_.empty() && writes_.empty() && stopping_) return;
++                auto& queue = !reads_.empty() ? reads_ : writes_;
++                task = std::move(queue.front()); queue.pop_front(); ++active_;
++                if (!task.dst) fill_bytes_ -= task.bytes;
++            }
++            Done result{task.slot,0,false};
++            try {
++                if (task.dst) result.hit = cache_.read(task.offset,task.bytes,task.dst,result.bytes);
++                else cache_.write(task.offset,task.bytes,task.data.data());
++            } catch (...) {
++                cache_.abandon("cache worker failed; using source");
++            }
++            {
++                std::lock_guard<std::mutex> lk(mu_);
++                if (task.dst) done_.push_back(result);
++                --active_;
++                if (reads_.empty() && writes_.empty() && active_ == 0) idle_.notify_all();
++            }
++            if (task.dst) source_.wake();
++        }
++    }
++};
++
+ struct Use {
+     uint32_t row;
+     uint32_t in_page;      // byte offset of the row inside the read buffer
+@@ -110,6 +191,8 @@ struct PleReader::Impl {
+     std::unordered_map<uint32_t, TicketState> tickets;
+     uint32_t next_ticket = 1;
+     RowCache cache;
++    PleDiskCache disk_cache;
++    std::unique_ptr<DiskWorkers> disk_workers;
+     ReaderStats stats;
+     size_t ring_pos = 0;
+     double delay_us = 0;
+@@ -152,31 +235,52 @@ struct PleReader::Impl {
+             inflight[s] = std::move(queue.front());
+             queue.pop_front();
+             Job& j = inflight[s];
+-            j.issued_us = now_us();
+-            std::string kerr;             // a keep-alive read that cannot go out must not fail the reader
+-            if (!file.submit(j.offset, slot_buf(s), j.length, s, j.keepalive ? kerr : error)) {
+-                if (j.keepalive) {                 // no more of them: the SSD may sleep as before
+-                    keep_us = 0;
+-                    j.keepalive = false;
+-                    free_slots.push_back(s);
+-                    continue;
+-                }
+-                j.uses.clear();
+-                auto it = tickets.find(j.ticket);
+-                if (it != tickets.end() && it->second.pending > 0) --it->second.pending;
++            if (!j.keepalive && disk_workers && disk_cache.may_contain(j.offset, j.length) &&
++                disk_workers->read(j.offset, j.length, slot_buf(s), s)) continue;
++            if (!submit_source(s)) return false;
++        }
++        return true;
++    }
++
++    bool submit_source(uint32_t s) {
++        Job& j = inflight[s];
++        j.issued_us = now_us();
++        std::string kerr;             // a keep-alive read that cannot go out must not fail the reader
++        if (!file.submit(j.offset, slot_buf(s), j.length, s, j.keepalive ? kerr : error)) {
++            if (j.keepalive) {                 // no more of them: the SSD may sleep as before
++                keep_us = 0;
++                j.keepalive = false;
+                 free_slots.push_back(s);
+-                cancel_queued();
+-                return false;
+-            }
+-            last_read_us = j.issued_us;
+-            if (!j.keepalive) {                    // a keep-alive read counts when it completes (`finish`)
+-                stats.submit_us += now_us() - j.issued_us;
+-                ++stats.reads;
++                return true;
+             }
++            j.uses.clear();
++            auto it = tickets.find(j.ticket);
++            if (it != tickets.end() && it->second.pending > 0) --it->second.pending;
++            free_slots.push_back(s);
++            cancel_queued();
++            return false;
++        }
++        last_read_us = j.issued_us;
++        if (!j.keepalive) {                    // a keep-alive read counts when it completes (`finish`)
++            stats.submit_us += now_us() - j.issued_us;
++            ++stats.reads;
+         }
+         return true;
+     }
+ 
++    bool process_disk() {
++        if (!disk_workers) return true;
++        bool ok = true;
++        for (const auto& c : disk_workers->completed()) {
++            if (c.hit) {
++                ++stats.disk_hits; stats.disk_bytes += c.bytes;
++                if (!complete_rows(c.slot, c.bytes, false)) ok = false;
++            } else if (!submit_source(c.slot)) ok = false;
++        }
++        if (ok && error.empty()) return pump();
++        return ok;
++    }
++
+     /// When the next keep-alive read is due, or < 0 when none is: it is off, the reader failed, or no rows
+     /// were asked for within the window (then the SSD may sleep; the next `issue` re-arms it).
+     double keepalive_due(double now) const {
+@@ -227,9 +331,15 @@ struct PleReader::Impl {
+         }
+         record_latency(now_us() - j.issued_us);
+         stats.bytes += c.bytes;
++        if (!complete_rows(s, c.bytes, true)) return false;
++        return error.empty() ? pump() : true;
++    }
++
++    bool complete_rows(uint32_t s, uint32_t bytes, bool from_source) {
++        Job& j = inflight[s];
+         const uint8_t* buf = slot_buf(s);
+         for (const Use& u : j.uses) {
+-            if (u.in_page + row_bytes > c.bytes) {
++            if (u.in_page + row_bytes > bytes) {
+                 error = "PleReader: short read inside the table";
+                 cancel_queued();
+                 j.uses.clear();
+@@ -239,6 +349,7 @@ struct PleReader::Impl {
+                 return false;
+             }
+         }
++        if (from_source && disk_workers && disk_cache.enabled()) disk_workers->fill(j.offset, bytes, buf);
+         for (const Use& u : j.uses) {
+             std::memcpy(u.dst, buf + u.in_page, row_bytes);
+             cache.insert(u.row, buf + u.in_page);
+@@ -247,7 +358,7 @@ struct PleReader::Impl {
+         if (it != tickets.end() && it->second.pending > 0) --it->second.pending;
+         j.uses.clear();
+         free_slots.push_back(s);
+-        return error.empty() ? pump() : true;
++        return true;
+     }
+ 
+     /// Completions (or wake packets) just returned by `file.wait`, applying fault injection.
+@@ -268,6 +379,7 @@ struct PleReader::Impl {
+             }
+             if (!finish(got[i])) ok = false;   // drain the rest of this batch so no completed slot is stranded
+         }
++        if (!process_disk()) ok = false;
+         return ok;
+     }
+ 
+@@ -334,7 +446,8 @@ PleReader::~PleReader() {
+ }
+ 
+ bool PleReader::open(const std::string& path, uint64_t table_offset, uint64_t n_rows, uint32_t max_inflight,
+-                     uint64_t cache_rows, std::string& err, bool io_thread, uint32_t row_bytes) {
++                     uint64_t cache_rows, std::string& err, bool io_thread, uint32_t row_bytes,
++                     const std::vector<PleDiskLocation>& disk_cache) {
+     close();
+     if (max_inflight == 0 || max_inflight > 1024) { err = "PleReader: max_inflight must be 1..1024"; return false; }
+     if (row_bytes == 0 || row_bytes > PAGE) { err = "PleReader: row_bytes must be 1..4096"; return false; }
+@@ -354,6 +467,15 @@ bool PleReader::open(const std::string& path, uint64_t table_offset, uint64_t n_
+     impl_->free_slots.clear();
+     for (uint32_t s = max_inflight; s-- > 0;) impl_->free_slots.push_back(s);
+     impl_->cache.init(cache_rows, row_bytes);
++    if (std::any_of(disk_cache.begin(), disk_cache.end(), [](const auto& loc) { return loc.mib > 0; })) {
++        std::string why;
++        if (!impl_->disk_cache.open(disk_cache, why))
++            std::fprintf(stderr, "strata PLE disk cache: disabled: %s; using source\n", why.c_str());
++    }
++    if (impl_->disk_cache.enabled()) {
++        try { impl_->disk_workers = std::make_unique<DiskWorkers>(impl_->disk_cache, impl_->file, max_inflight); }
++        catch (...) { impl_->disk_cache.abandon("cannot create cache workers; using source"); }
++    }
+     impl_->error.clear();
+     impl_->keep_us = 0;
+     impl_->last_issue_us = impl_->last_read_us = 0;
+@@ -392,16 +514,13 @@ void PleReader::close() {
+     }
+     // Outstanding reads must finish before their buffers are released (caller-thread mode, or a worker that
+     // stopped on an error).
++    m.queue.clear();
+     if (m.file.is_open()) {
+-        while (m.free_slots.size() < m.max_inflight) {
+-            Completion c[64];
+-            const int n = m.file.wait(c, 64, -1);
+-            if (n == 0) break;
+-            for (int i = 0; i < n; ++i)
+-                if (c[i].tag != DirectFile::WAKE_TAG) m.free_slots.push_back((uint32_t) c[i].tag);
+-        }
++        while (m.free_slots.size() < m.max_inflight) m.drain(-1);
+     }
++    m.disk_workers.reset(); // finishes bounded background fills before files and slabs go away
+     m.file.close();
++    m.disk_cache.close();
+     DirectFile::free_aligned(m.slab);
+     m.slab = nullptr;
+     m.queue.clear();
+@@ -416,6 +535,8 @@ void PleReader::close() {
+     m.last_issue_us = m.last_read_us = 0;
+ }
+ 
++void PleReader::flush_disk_cache() { if (impl_->disk_workers) impl_->disk_workers->flush(); }
++
+ bool PleReader::is_open() const { return impl_->file.is_open(); }
+ uint32_t PleReader::row_bytes() const { return impl_->row_bytes; }
+ 
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index bfe8374ba..2012ee71d 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -35,6 +35,7 @@
+ #include "strata/core/serve_stop_bound.hpp"
+ #endif
+ #include "strata/core/conversation_file.hpp"
++#include "strata/core/conversation_disk.hpp"
+ #include "strata/core/session_save_reclaim.hpp"
+ #include "strata/core/conversation_memory.hpp"
+ #include "strata/core/auto_cache.hpp"
+@@ -661,6 +662,7 @@ struct Options {
+     /// Plan v0.3 P2: how the n-gram table is read. Direct (default) = unbuffered SSD reads, table never in RAM.
+     std::string ple_io = "direct";
+     bool ple_io_explicit = false;      ///< --ple-io was given: the engine only warns when direct measures slow
++    std::vector<strata::ngram::PleDiskLocation> ple_disk_cache;
+     int64_t ple_row_cache = 1 << 20;   ///< bounded row cache (rows of 90 B); 0 disables
+     int ple_inflight = 256;   // the prompt path reads a chunk's rows at once: 64 left the SSD half idle (32K: 303 -> 189 ms)
+     double ple_delay_us = 0;           ///< fault injection: every row read completes no earlier than this
+@@ -925,6 +927,12 @@ struct Options {
+     int prompt_cache = 6;
+     int64_t conversation_cache_mib = -1; // host RAM for independent conversations; -1: not given, --serve sizes it from the free RAM (#3493), 0: off
+     int conversation_cache_slots = 4;
++    std::string conversation_cache_dir;
++    bool conversation_cache_persist = false; // opt-in durable RAM mirror and restart reuse
++    int64_t conversation_cache_disk_mib = 12288;
++    int64_t conversation_cache_disk_min_tokens = 60001;
++    int64_t conversation_cache_disk_min_free_mib = 512;
++    std::string conversation_cache_tier_order = "ram-first";
+     int64_t conversation_cache_min_free_mib = 2560;
+     /// --serve: park only conversations of at least this many tokens.  Every parked conversation costs one of
+     /// conversation_cache_slots whatever its length, so without it a client that interleaves short side requests
+@@ -1035,6 +1043,8 @@ void usage() {
+                  "                       reads, the table never enters RAM or the file cache; mmap: A/B arm;\n"
+                  "                       ram: the whole table locked in RAM at start (VirtualLock on Windows,\n"
+                  "                       mlock elsewhere), so no SSD read sits on the prompt or token path\n"
++                 "  --ple-disk-cache PATH MIB  optional Linux disk page cache; repeat for multiple drives (default off)\n"
++                 "                       requires --ple-io direct; RAM row cache stays independent\n"
+                  "  --ple-row-cache N    bounded cache of fetched rows, 90 B each (default 1048576; 0 = off)\n"
+                  "  --ple-inflight N     outstanding SSD reads (default 256)\n"
+                  "  --ple-delay-us U     fault injection: each row read completes no earlier than U us\n"
+@@ -1105,6 +1115,12 @@ void usage() {
+                  "  --vision             --serve takes images too (GENI requests; embeddings from strata-vision)\n"
+                  "  --prompt-cache N     --serve: keep N conversation checkpoints between requests (default 6, ~118 MB\n"
+                  "                       of RAM each; 0 = read every prompt from the start)\n"
++                 "  --conversation-cache-dir PATH  --serve: disposable disk cache (Linux, default off)\n"
++                 "  --conversation-cache-persist  retain disk KV across restarts; mirror RAM-eligible conversations at reply boundaries\n"
++                 "  --conversation-cache-disk-mib N  disk budget (default 12288 MiB, 0 = off)\n"
++                 "  --conversation-cache-disk-min-tokens N  minimum parked length (default 60001)\n"
++                 "  --conversation-cache-disk-min-free-mib N  disk cache leaves this much free (default 512)\n"
++                 "  --conversation-cache-tier-order ram-first|disk-first  cache placement (default ram-first)\n"
+                  "  --conversation-cache-mib N  --serve: RAM budget for parked conversations (default: sized from the free RAM, up to 8192; 0 = off)\n"
+                  "  --conversation-cache-slots N  --serve: at most N parked conversations (default 4)\n"
+                  "  --conversation-cache-min-free-mib N  --serve: RAM floor (under MemAvailable, the cgroup limits and\n"
+@@ -3425,6 +3441,17 @@ int main(int argc, char** argv) {
+         else if (a == "--ple-gguf") o.ple_gguf = next("--ple-gguf");
+         else if (a == "--no-ple") o.no_ple = true;
+         else if (a == "--ple-io") { o.ple_io = next("--ple-io"); o.ple_io_explicit = true; }
++        else if (a == "--ple-disk-cache") {
++            const std::string path = next("--ple-disk-cache");
++            const std::string capacity = next("--ple-disk-cache");
++            uint64_t mib = 0;
++            const auto parsed = std::from_chars(capacity.data(), capacity.data() + capacity.size(), mib);
++            if (path.empty() || parsed.ec != std::errc{} || parsed.ptr != capacity.data() + capacity.size() || mib > 1048576) {
++                std::fprintf(stderr, "strata generate: --ple-disk-cache expects PATH and 0..1048576 MiB\n");
++                std::exit(1);
++            }
++            o.ple_disk_cache.push_back({path, mib});
++        }
+         else if (a == "--ple-row-cache") o.ple_row_cache = std::atoll(next("--ple-row-cache"));
+         else if (a == "--ple-inflight") o.ple_inflight = std::atoi(next("--ple-inflight"));
+         else if (a == "--ple-delay-us") o.ple_delay_us = std::atof(next("--ple-delay-us"));
+@@ -3586,22 +3613,35 @@ int main(int argc, char** argv) {
+         else if (a == "--serve") o.serve = true;
+         else if (a == "--vision") o.vision = true;
+         else if (a == "--session-save-reclaim") o.session_save_reclaim = true;
++        else if (a == "--conversation-cache-tier-order") {
++            o.conversation_cache_tier_order = next("--conversation-cache-tier-order");
++            if (o.conversation_cache_tier_order != "ram-first" && o.conversation_cache_tier_order != "disk-first") {
++                std::fprintf(stderr, "strata generate: --conversation-cache-tier-order expects ram-first or disk-first\n");
++                std::exit(1);
++            }
++        }
++        else if (a == "--conversation-cache-persist") o.conversation_cache_persist = true;
++        else if (a == "--conversation-cache-dir") o.conversation_cache_dir = next("--conversation-cache-dir");
+         else if (a == "--prompt-cache") o.prompt_cache = std::max(0, std::atoi(next("--prompt-cache")));
+         else if (a == "--conversation-cache-mib" || a == "--conversation-cache-slots" ||
+                  a == "--conversation-cache-min-free-mib" || a == "--conversation-cache-min-tokens" ||
+-                 a == "--conversation-cache-park-gain" ||
++                 a == "--conversation-cache-park-gain" || a == "--conversation-cache-disk-mib" ||
++                 a == "--conversation-cache-disk-min-tokens" || a == "--conversation-cache-disk-min-free-mib" ||
+                  a == "--session-min-free-mib" || a == "--memory-limit-mib") {
+             const std::string value = next(a.c_str());
+             int64_t number = 0;
+             const auto result = std::from_chars(value.data(), value.data() + value.size(), number);
+             const int64_t limit = (a == "--conversation-cache-slots" || a == "--conversation-cache-min-tokens" ||
+-                                   a == "--conversation-cache-park-gain")
++                                   a == "--conversation-cache-park-gain" || a == "--conversation-cache-disk-min-tokens")
+                                       ? INT32_MAX : INT64_MAX / (1024 * 1024);
+             if (result.ec != std::errc{} || result.ptr != value.data() + value.size() || number < 0 || number > limit) {
+                 std::fprintf(stderr, "%s needs a nonnegative integer within range\n", a.c_str());
+                 return 2;
+             }
+-            if (a == "--conversation-cache-mib") o.conversation_cache_mib = number;
++            if (a == "--conversation-cache-disk-mib") o.conversation_cache_disk_mib = number;
++            else if (a == "--conversation-cache-disk-min-tokens") o.conversation_cache_disk_min_tokens = number;
++            else if (a == "--conversation-cache-disk-min-free-mib") o.conversation_cache_disk_min_free_mib = number;
++            else if (a == "--conversation-cache-mib") o.conversation_cache_mib = number;
+             else if (a == "--conversation-cache-min-free-mib") o.conversation_cache_min_free_mib = number;
+             else if (a == "--conversation-cache-min-tokens") o.conversation_cache_min_tokens = number;
+             else if (a == "--conversation-cache-park-gain") o.conversation_cache_park_gain = number;
+@@ -5337,6 +5377,13 @@ int main(int argc, char** argv) {
+         const auto tpl = Clock::now();
+         pio.max_inflight = (uint32_t) o.ple_inflight;
+         pio.cache_rows = (uint64_t) o.ple_row_cache;
++        const bool ple_disk_requested = std::any_of(o.ple_disk_cache.begin(), o.ple_disk_cache.end(),
++                                                   [](const auto& loc) { return loc.mib > 0; });
++        if (ple_disk_requested && pio.mode != strata::kernels::PleIo::Direct) {
++            std::fprintf(stderr, "strata generate: --ple-disk-cache requires --ple-io direct\n");
++            return 1;
++        }
++        pio.disk_cache = o.ple_disk_cache;
+         pio.io_thread = !o.ple_sync_submit;
+         // Keep the SSD awake while rows are being asked for (PleReader::set_keepalive): some SSDs stall the first
+         // reads 50-150 ms after ~250 ms without a command.  STRATA_SSD_KEEPALIVE = ms without a read before one
+@@ -5365,7 +5412,7 @@ int main(int argc, char** argv) {
+         // (2026-10-26): table + 8 GiB alone admitted it, the table's lock took the lockable memory and the expert load
+         // died with error 1453 (ERROR_WORKING_SET_QUOTA).
+         bool ple_auto_ram = false;
+-        if (pio.mode == strata::kernels::PleIo::Direct && !o.ple_io_explicit) {
++        if (pio.mode == strata::kernels::PleIo::Direct && !o.ple_io_explicit && !ple_disk_requested) {
+             const strata::kernels::PleIoOptions direct_pio = pio;
+             const char* auto_ram = std::getenv("STRATA_PLE_AUTO_RAM");
+             bool allowed = strata::core::ple_auto_ram_allowed(auto_ram, strata::qwen_defaults_026());
+@@ -5423,7 +5470,7 @@ int main(int argc, char** argv) {
+                 // a token from a cold table with no progress mark).  Linux SATA SSD: the 15K rows/s bar is NVMe-calibrated, a SATA SSD
+                 // tops out at 10-14K with direct's 16 reads in flight and mapped reads were 7x slower.  The switch is only made when asked for
+                 // (STRATA_PLE_AUTO_MMAP=1, the 0.1.42 behaviour); otherwise the slow probe warns and direct is kept.
+-                bool auto_mmap = !o.ple_io_explicit;
++                bool auto_mmap = !o.ple_io_explicit && !ple_disk_requested;
+                 if (const char* am = std::getenv("STRATA_PLE_AUTO_MMAP"); am == nullptr || std::atoi(am) == 0) auto_mmap = false;
+                 if (auto_mmap) {
+                     std::fprintf(stderr, "strata generate: --ple-io direct measures slow here (%.0f rows/s, about %.0f MB/s of "
+@@ -11831,6 +11878,7 @@ int main(int argc, char** argv) {
+         strata::core::ConversationCache conversations(
+             o.prompt_cache > 0 ? (size_t) o.conversation_cache_mib * 1024 * 1024 : 0,
+             (size_t) o.conversation_cache_slots, o.conversation_cache_min_tokens);
++        strata::core::ConversationDiskCache disk_conversations;
+         // Disk sessions: what a session file is bound to.  The model fingerprint samples every model input this
+         // engine loaded, by role (conversation_file.hpp), once; the config fingerprint covers the RESOLVED settings
+         // that change what the saved bytes mean - the rope (K is cached post-RoPE), the loaded control vector, the
+@@ -11867,6 +11915,22 @@ int main(int argc, char** argv) {
+                 if (next_file) next_file();
+                 if (!strata::core::session_model_fingerprint(files, fp, e, next_file))
+                     return false;
++                if (o.conversation_cache_persist) {
++#if defined(__linux__)
++                    // Conservatively refuse reuse after any model input changes, even in the unsampled middle.
++                    strata::core::SessionIdentityBuilder strong(fp);
++                    for (const auto& file : files) {
++                        struct stat st{}; const bool present=::stat(file.path.c_str(),&st)==0;
++                        strong.str("role",file.role); strong.u64("present",present);
++                        if (present) {
++                            strong.u64("device",st.st_dev); strong.u64("inode",st.st_ino); strong.u64("size",st.st_size);
++                            strong.i64("mtime_s",st.st_mtim.tv_sec); strong.i64("mtime_ns",st.st_mtim.tv_nsec);
++                            strong.i64("ctime_s",st.st_ctim.tv_sec); strong.i64("ctime_ns",st.st_ctim.tv_nsec);
++                        }
++                    }
++                    fp=strong.digest();
++#endif
++                }
+                 model_fp = fp;
+             }
+             if (!config_fp) {
+@@ -11905,6 +11969,217 @@ int main(int argc, char** argv) {
+             id.config = *config_fp;
+             return true;
+         };
++        if (!o.conversation_cache_dir.empty() && o.conversation_cache_disk_mib > 0) {
++            std::string why; uint64_t compatibility=0;
++            if (o.batch > 0 || o.peer_device >= 1 || o.prompt_cache <= 0)
++                why = "requires --prompt-cache > 0, no --batch and no --peer-device";
++            else if (o.conversation_cache_persist) {
++#if defined(__linux__)
++                strata::core::SessionFileIdentity identity;
++                if (session_identity(identity,why,{})) {
++                    strata::core::SessionIdentityBuilder key(0x5045525349535401ull);
++                    key.u64("model",identity.model); key.u64("config",identity.config);
++                    key.str("layer_split",o.layer_split); key.u64("stages",stages.size()+1);
++                    key.u64("mtp_first",mtp_first); key.u64("mtp",use_mtp);
++                    // Bind remaining engine options too: cache placement/capacity may change independently.
++                    for (int arg=1;arg<argc;++arg) {
++                        const std::string value=argv[arg];
++                        if (value=="--conversation-cache-persist") continue;
++                        if (value.rfind("--conversation-cache-",0)==0 && arg+1<argc) { ++arg; continue; }
++                        key.str("engine_arg",value);
++                    }
++                    // A different executable (including a patched kernel build) always starts a new generation.
++                    struct stat exe{};
++                    if (::stat("/proc/self/exe",&exe)) why="cannot identify the running executable";
++                    else {
++                        key.u64("exe_dev",exe.st_dev);key.u64("exe_ino",exe.st_ino);key.u64("exe_size",exe.st_size);
++                        key.i64("exe_ctime",exe.st_ctim.tv_sec);key.i64("exe_ctime_ns",exe.st_ctim.tv_nsec);
++                        std::vector<std::string> env;
++                        for(char** e=::environ;e&&*e;++e) {
++                            std::string v=*e;
++                            if(v.rfind("STRATA_",0)==0 || v.rfind("CUDA_",0)==0 || v.rfind("CUBLAS_",0)==0)env.push_back(v);
++                        }
++                        std::sort(env.begin(),env.end());for(const auto& v:env)key.str("runtime_env",v);
++                        for(size_t k=0;k<=stages.size();++k) {
++                            const int dev=k?stages[k-1]->dev:0;cudaDeviceProp prop{};
++                            if(cudaGetDeviceProperties(&prop,dev)!=cudaSuccess){why="cannot identify GPU architecture";break;}
++                            key.i64("gpu",dev);key.i64("cc_major",prop.major);key.i64("cc_minor",prop.minor);
++                            if(k){key.i64("lo",stages[k-1]->lb);key.i64("hi",stages[k-1]->le);}
++                        }
++                        compatibility=key.digest();
++                    }
++                }
++#else
++                why="persistent disk cache currently requires Linux";
++#endif
++            }
++            if (why.empty()) disk_conversations.open(o.conversation_cache_dir,(uint64_t)o.conversation_cache_disk_mib<<20,
++                o.conversation_cache_disk_min_tokens,why,o.conversation_cache_persist,compatibility,(uint64_t)o.max_context);
++            if (!why.empty()) std::fprintf(stderr,"strata serve: disk cache disabled: %s\n",why.c_str());
++            else std::fprintf(stderr,"strata serve: disk cache: %s, %lld MiB, minimum %lld tokens%s\n",
++                o.conversation_cache_dir.c_str(),(long long)o.conversation_cache_disk_mib,
++                (long long)o.conversation_cache_disk_min_tokens,
++                o.conversation_cache_persist?"; persistent; mirrors RAM-eligible conversations at reply boundaries":"");
++        } else if (o.conversation_cache_persist) {
++            std::fprintf(stderr,"strata serve: persistent disk cache disabled: set --conversation-cache-dir and a positive disk budget\n");
++        }
++        auto mirror_wants = [&](size_t n) {
++            return o.conversation_cache_persist && conversations.enabled() && conversations.wants((int64_t)n);
++        };
++        if (o.conversation_cache_persist) disk_conversations.set_prefer_keep([&](const auto& entry) {
++            return conversations.holds(entry.live.ids,entry.live.imgs,entry.cvec) ||
++                (live_ok && cvec_cached==entry.cvec && live==entry.live.ids && live_imgs==entry.live.imgs);
++        });
++        auto disk_beat = [&](uint64_t done, uint64_t total) {
++            strata::core::progress_beat();
++            std::printf("DISK_CACHE %llu %llu\n", (unsigned long long) done, (unsigned long long) total);
++            std::fflush(stdout);
++        };
++        auto disk_admit = [&](uint64_t need, std::string& why) {
++            if (strata::core::conversation_memory_admit(strata::core::available_host_bytes(), need,
++                    (uint64_t) o.conversation_cache_min_free_mib << 20)) { why.clear(); return true; }
++            why = "RAM floor admission refused (need " + std::to_string(need >> 20) + " MiB)";
++            return false;
++        };
++        // Stream each carve separately. Only its running state and deepest complete checkpoint are copied.
++        auto park_disk = [&]() -> bool {
++            if (!live_ok || !disk_conversations.enabled() ||
++                (!disk_conversations.wants(live.size()) && !mirror_wants(live.size()))) return false;
++            if (o.conversation_cache_persist && disk_conversations.contains(live,live_imgs,checks,cvec_cached)) return true;
++            const auto t0 = Clock::now();
++            std::string why;
++            try {
++                strata::core::progress_at("request: writing disk conversation");
++                strata::core::conversation_checkpoint_join(nullptr);
++                strata::core::conversation_park_join();
++                strata::core::SessionFileIdentity identity;
++                if (!session_identity(identity, why, [&] { disk_beat(0, 0); }))
++                    throw std::runtime_error(why);
++                const ConvCheckpoint* deepest = nullptr;
++                for (const auto& cp : checks) if (cp.stage_parts.size() == stages.size() &&
++                        (!deepest || cp.ids.size() > deepest->ids.size())) deepest = &cp;
++                std::vector<ConvCheckpoint> keys;
++                if (deepest) { keys.emplace_back(); keys.back().ids = deepest->ids; keys.back().imgs = deepest->imgs; }
++                auto state_of = [&](size_t k) -> strata::core::SessionState& { return k ? stages[k-1]->ss : ss; };
++                auto draft_of = [&](size_t k) -> const strata::core::QsaState* {
++                    return use_mtp && (stages.empty() || (mtp_first ? k == 0 : k == stages.size())) ? &mtp.kv_state() : nullptr;
++                };
++                uint64_t estimate = 0;
++                for (size_t k = 0; k <= stages.size(); ++k) {
++                    const strata::core::OnDevice on(k ? stages[k-1]->dev : -1);
++                    size_t n = 0;
++                    const std::vector<ConvCheckpoint> none;
++                    const strata::core::ConversationView v{live, live_imgs, none, cvec_cached};
++                    if (!strata::core::conversation_snapshot_bytes(v, state_of(k), g, draft_of(k), n, why))
++                        throw std::runtime_error(why);
++                    const auto cp_bytes = !deepest ? 0 : (k ? deepest->stage_parts[k-1].bytes() : deepest->bytes());
++                    if (n > UINT64_MAX - estimate || cp_bytes + (1 << 20) > UINT64_MAX - estimate - n)
++                        throw std::runtime_error("snapshot size overflow");
++                    estimate += n + cp_bytes + (1 << 20);
++                }
++                const bool stored = disk_conversations.store(live, live_imgs, keys, cvec_cached,
++                    stages.size() + 1, estimate, [&](const std::string& path, size_t k, size_t& bytes, std::string& e) {
++                        const strata::core::OnDevice on(k ? stages[k-1]->dev : -1);
++                        if (cudaDeviceSynchronize() != cudaSuccess) { e = "stage synchronization failed"; return false; }
++                        auto& state = state_of(k);
++                        strata::core::ConversationStateSizes z;
++                        if (!strata::core::conversation_session_sizes(g, state, z, e)) return false;
++                        const size_t state_bytes = z.gdn + z.ple + (size_t) state.qsa_alloc * (z.tail + z.dead + z.block_pos);
++                        const auto* cp = !deepest ? nullptr : (k ? &deepest->stage_parts[k-1] : deepest);
++                        strata::core::SessionSaveLive sl{state_bytes, live.size(), live_imgs.size(),
++                            (uint64_t) state.qsa_alloc + (draft_of(k) ? 1u : 0u)};
++                        if (!disk_admit(strata::core::session_save_peak_bytes(cp, sl), e)) return false;
++                        std::vector<ConvCheckpoint> selected;
++                        if (cp) {
++                            selected.push_back(*cp); selected.back().stage_parts.clear();
++                            selected.back().ids = deepest->ids; selected.back().imgs = deepest->imgs;
++                            selected.back().used = deepest->used;
++                        }
++                        const strata::core::ConversationView view{live, live_imgs, selected, cvec_cached};
++                        strata::core::SavedConversation meta;
++                        std::vector<strata::core::SessionKvSource> sources;
++                        if (!strata::core::conversation_snapshot_sources(meta, sources, view, state, g, draft_of(k), e)) return false;
++                        strata::core::SessionWriteOptions wo;
++                        wo.durable = o.conversation_cache_persist;
++                        wo.min_free_bytes = (uint64_t) o.conversation_cache_disk_min_free_mib << 20;
++                        wo.progress = disk_beat;
++                        return strata::core::session_file_write(path, meta, sources, identity, bytes, e, wo);
++                    }, why, mirror_wants(live.size()));
++                std::fprintf(stderr, "strata serve: disk cache: %s %zu tokens in %.1f ms; entries=%zu bytes=%llu%s%s\n",
++                    stored ? "parked" : "skipped", live.size(),
++                    std::chrono::duration<double, std::milli>(Clock::now() - t0).count(), disk_conversations.size(),
++                    (unsigned long long) disk_conversations.bytes(), why.empty() ? "" : "; ", why.c_str());
++                strata::core::progress_at("request");
++                return stored;
++            } catch (const std::exception& e) {
++                std::fprintf(stderr, "strata serve: disk cache: skip parking %zu tokens: %s\n", live.size(), e.what());
++                strata::core::progress_at("request");
++                return false;
++            }
++        };
++        // Spill an already captured RAM image without recopying its K/V. All stage files are committed as one
++        // entry. Only the deepest checkpoint remains; ownership was removed from RAM accounting before the call.
++        auto spill_ram = [&](strata::core::SavedConversation&& image) {
++            if (!disk_conversations.enabled() ||
++                (!disk_conversations.wants(image.live.ids.size()) && !mirror_wants(image.live.ids.size()))) return;
++            if (o.conversation_cache_persist && disk_conversations.contains(image.live.ids,image.live.imgs,image.checkpoints,image.cvec)) return;
++            const auto t0 = Clock::now();
++            std::string why;
++            try {
++                strata::core::progress_at("request: spilling RAM conversation to disk");
++                strata::core::conversation_checkpoint_join(nullptr);
++                strata::core::conversation_park_join();
++                if (image.stage_images.size() != stages.size()) throw std::runtime_error("stage count");
++                size_t deepest = SIZE_MAX;
++                for (size_t i = 0; i < image.checkpoints.size(); ++i)
++                    if (deepest == SIZE_MAX || image.checkpoints[i].ids.size() > image.checkpoints[deepest].ids.size()) deepest = i;
++                auto part_of = [&](size_t k) -> strata::core::SavedConversation& {
++                    return k ? image.stage_images[k-1] : image;
++                };
++                // Check every stage before moving the chosen checkpoint. No additional full-state allocation.
++                for (size_t k = 1; k <= stages.size(); ++k) {
++                    const auto& part = part_of(k);
++                    if (part.live.ids != image.live.ids || part.live.imgs != image.live.imgs || part.cvec != image.cvec ||
++                        part.checkpoints.size() != image.checkpoints.size()) throw std::runtime_error("stage identity");
++                    if (deepest != SIZE_MAX && (part.checkpoints[deepest].ids != image.checkpoints[deepest].ids ||
++                        part.checkpoints[deepest].imgs != image.checkpoints[deepest].imgs)) throw std::runtime_error("checkpoint identity");
++                }
++                for (size_t k = 0; k <= stages.size(); ++k) {
++                    auto& part = part_of(k);
++                    if (deepest != SIZE_MAX) {
++                        auto cp = std::move(part.checkpoints[deepest]);
++                        part.checkpoints.clear(); part.checkpoints.push_back(std::move(cp));
++                    }
++                }
++                strata::core::SessionFileIdentity identity;
++                if (!session_identity(identity, why, [&] { disk_beat(0,0); })) throw std::runtime_error(why);
++                const uint64_t overhead = (uint64_t) (stages.size() + 1) << 20;
++                if (image.bytes() > UINT64_MAX - overhead) throw std::runtime_error("snapshot size overflow");
++                const uint64_t estimate = image.bytes() + overhead;
++                const bool stored = disk_conversations.store(image.live.ids, image.live.imgs, image.checkpoints, image.cvec,
++                    stages.size() + 1, estimate, [&](const std::string& path, size_t k, size_t& bytes, std::string& e) {
++                        if (!disk_admit(18ull << 20, e)) return false;
++                        strata::core::SessionWriteOptions wo; wo.durable = o.conversation_cache_persist;
++                        wo.min_free_bytes = (uint64_t) o.conversation_cache_disk_min_free_mib << 20;
++                        wo.progress = disk_beat;
++                        return strata::core::session_file_write(path, part_of(k), identity, bytes, e, wo);
++                    }, why, mirror_wants(image.live.ids.size()));
++                std::fprintf(stderr, "strata serve: disk cache: RAM spill %s %zu tokens in %.1f ms; entries=%zu bytes=%llu%s%s\n",
++                    stored ? "parked" : "skipped", image.live.ids.size(),
++                    std::chrono::duration<double,std::milli>(Clock::now()-t0).count(), disk_conversations.size(),
++                    (unsigned long long) disk_conversations.bytes(), why.empty() ? "" : "; ", why.c_str());
++            } catch (const std::exception& e) {
++                std::fprintf(stderr, "strata serve: disk cache: RAM spill failed %zu tokens: %s\n", image.live.ids.size(), e.what());
++            }
++            strata::core::progress_at("request");
++        };
++        const bool ram_first = o.conversation_cache_tier_order == "ram-first";
++        if (disk_conversations.enabled())
++            std::fprintf(stderr, "strata serve: conversation tiers: %s, RAM=%lld MiB/%d slots, disk free floor=%lld MiB\n",
++                o.conversation_cache_tier_order.c_str(), (long long) o.conversation_cache_mib,
++                o.conversation_cache_slots, (long long) o.conversation_cache_disk_min_free_mib);
++        if (ram_first && disk_conversations.enabled()) conversations.set_eviction_sink(spill_ram);
++        bool last_ram_park_saved = false;
+         // What a park captures: the main session's conversation (park_current) or an idle batch slot's (park_slot:
+         // the reply it decoded, before an admission overwrites it).  One budget / admission / snapshot path for both.
+         struct ParkSource {
+@@ -11952,6 +12227,7 @@ int main(int argc, char** argv) {
+         };
+         pool_topup();   // the first request's checkpoints find the pool full
+         auto park_source = [&](const ParkSource& src, size_t held) -> bool {
++            last_ram_park_saved = false;
+             // #2049: parking copies the outgoing conversation's running checkpoints and K/V into host memory, which
+             // is a silent stretch of the "request" stage; when the OS has paged that memory out it takes minutes.
+             // Named, so a stall report says "parking"; its copies beat (conversation_copy.hpp), so the watchdog
+@@ -12136,6 +12412,7 @@ int main(int argc, char** argv) {
+                 }
+                 const size_t snapshot_bytes = image.bytes();
+                 const bool stored = conversations.put(std::move(image), held);
++                last_ram_park_saved = stored;
+                 std::fprintf(stderr, "strata serve: conversation cache: %s %zu tokens%s in %.1f ms; parked=%zu bytes=%zu evictions=%zu snapshot_bytes=%zu reused_kv_bytes=%zu\n",
+                              stored ? "parked" : "skipped", src.ids.size(), src.what.c_str(),
+                              std::chrono::duration<double, std::milli>(Clock::now() - t0).count(),
+@@ -12148,13 +12425,19 @@ int main(int argc, char** argv) {
+             return true;
+         };
+         auto park_current_body = [&](size_t held) -> bool {
+-            if (!conversations.enabled() || !live_ok || live.empty()) return true;
++            if (!live_ok || live.empty()) return true;
++            if (o.conversation_cache_persist) park_disk(); // also mirror a RAM-bound outgoing conversation
++            if (!ram_first && disk_conversations.enabled() && park_disk()) return true;
++            if (!conversations.enabled()) { if (ram_first) park_disk(); return true; }
+             const size_t n_st = stages.size();
+             ParkSource src{live, live_imgs, checks, cvec_cached, ss, {},
+                            (n_st > 0 && !mtp_first) || !use_mtp ? nullptr : &mtp.kv_state(),
+                            use_mtp && !mtp_first && n_st > 0 ? &mtp.kv_state() : nullptr, true, ""};
+             for (auto& st : stages) src.stage_sessions.push_back(&st->ss);
+-            return park_source(src, held);
++            const bool ok = park_source(src, held);
++            if (ok && ram_first && !last_ram_park_saved && disk_conversations.enabled() && park_disk())
++                conversations.external_park_succeeded();
++            return ok;
+         };
+         // #752: the whole park (the checkpoint split included) is under one try, so a host OOM skips parking instead of
+         // ending the server
+@@ -15456,6 +15739,7 @@ int main(int argc, char** argv) {
+                     if (nan_flush) {   // #879: the file replaced the poisoned session; the parked ones go (no slots here)
+                         nan_flush = false;
+                         const size_t n_parked = conversations.clear();
++                        disk_conversations.clear();
+                         std::fprintf(stderr, "strata serve: after non-finite logits (#879): the restored session "
+                                              "replaces the live one; dropped %zu parked conversation%s\n", n_parked,
+                                      n_parked == 1 ? "" : "s");
+@@ -15846,6 +16130,7 @@ int main(int argc, char** argv) {
+                 checks.clear();
+                 tail_ckpt_len = -1;
+                 const size_t n_parked = conversations.clear();
++                disk_conversations.clear();
+                 size_t n_slots = 0, n_running = 0;
+                 for (BSlot& sl : bs)
+                     if (sl.active) {   // a running slot finishes its reply, but is not kept as a cache after it
+@@ -15966,7 +16251,7 @@ int main(int argc, char** argv) {
+                                  k + 1, (long long) (k < now.size() ? now[k].start : -1));
+                 }
+             }
+-            const auto parked = conversations.best(ids, req_imgs, want_cvec);
++            auto parked = conversations.best(ids, req_imgs, want_cvec);
+             std::optional<strata::core::SavedConversation> incoming;
+             // A checkpoint inside ANOTHER parked conversation (a sibling subagent's system prompt and tools, say) is
+             // borrowed: its K/V up to there and the checkpoint come over, and that conversation stays parked for its
+@@ -15977,6 +16262,79 @@ int main(int argc, char** argv) {
+                           conversations.borrows(parked);
+             if (parked.tokens > std::max(resume, slot_tokens) && !borrow)
+                 incoming.emplace(conversations.take(parked.index));
++            uint64_t disk_incoming = 0;
++            const auto dm = disk_conversations.best(ids, req_imgs, want_cvec);
++            if (dm.tokens > std::max({resume, slot_tokens, parked.tokens})) {
++                const auto t0 = Clock::now();
++                const auto* entry = disk_conversations.find(dm.serial);
++                // Admission may spill other RAM entries and grow/evict the disk index. Protect the selected group
++                // and any borrowed RAM donor; keep a small metadata copy rather than a pointer into that index.
++                disk_conversations.guard(dm.serial);
++                if (borrow) conversations.guard(parked.serial);
++                struct RamReadGuard {
++                    strata::core::ConversationCache& cache;
++                    ~RamReadGuard() { cache.unguard(); }
++                } ram_read_guard{conversations};
++                std::string why;
++                try {
++                    strata::core::progress_at("request: reading disk conversation");
++                    if (!entry || entry->files.size() != stages.size() + 1) throw std::runtime_error("stage count");
++                    const auto entry_metadata = *entry;
++                    entry = &entry_metadata;
++                    strata::core::SessionFileIdentity identity;
++                    if (!session_identity(identity, why, [&] { disk_beat(0, 0); })) throw std::runtime_error(why);
++                    strata::core::SavedConversation loaded;
++                    for (size_t k = 0; k < entry->files.size(); ++k) {
++                        const strata::core::OnDevice on(k ? stages[k-1]->dev : -1);
++                        auto& state = k ? stages[k-1]->ss : ss;
++                        const auto* draft = use_mtp && (stages.empty() || (mtp_first ? k == 0 : k == stages.size()))
++                            ? &mtp.kv_state() : nullptr;
++                        strata::core::SessionReadLimits limits;
++                        limits.stream_kv = true;
++                        limits.admit = [&](uint64_t need, std::string& reason) {
++                            size_t evicted = 0;
++                            while (!disk_admit(need, reason) && conversations.evict_oldest()) ++evicted;
++                            if (evicted) {
++                                std::fprintf(stderr, "strata serve: disk restore: released %zu RAM conversations for admission\n", evicted);
++                                strata::core::progress_at("request: reading disk conversation");
++                            }
++                            return disk_admit(need, reason);
++                        };
++                        limits.progress = disk_beat;
++                        limits.max_file_bytes = entry->bytes;
++                        if (!strata::core::conversation_session_read_limits(limits, state, g, draft,
++                                (uint64_t) o.max_context, 1, why)) throw std::runtime_error(why);
++                        strata::core::SavedConversation part; size_t bytes = 0;
++                        if (!strata::core::session_file_read(entry->files[k], identity, part, bytes, why, limits))
++                            throw std::runtime_error(why);
++                        if (part.checkpoints.size() != entry->checkpoints.size())
++                            throw std::runtime_error("stage checkpoint count differs");
++                        for (size_t j = 0; j < part.checkpoints.size(); ++j)
++                            if (part.checkpoints[j].ids != entry->checkpoints[j].ids ||
++                                part.checkpoints[j].imgs != entry->checkpoints[j].imgs)
++                                throw std::runtime_error("stage checkpoint identity differs");
++                        if (part.live.ids != entry->live.ids || part.live.imgs != entry->live.imgs || part.cvec != entry->cvec ||
++                            !strata::core::conversation_snapshot_validate(part, state, g, draft, why))
++                            throw std::runtime_error("invalid stage: " + why);
++                        if (k) loaded.stage_images.push_back(std::move(part)); else loaded = std::move(part);
++                    }
++                    // A RAM candidate removed above must not be lost if the disk candidate fails to load.
++                    if (incoming) conversations.put(std::move(*incoming));
++                    incoming = std::move(loaded); borrow = false;
++                    parked.tokens = dm.tokens; parked.live = dm.live; parked.serial = 0;
++                    disk_incoming = dm.serial;
++                    disk_conversations.touch(dm.serial);
++                    disk_conversations.guard(dm.serial);
++                    std::fprintf(stderr, "strata serve: disk cache: read %lld reusable tokens in %.1f ms\n",
++                        (long long) dm.tokens, std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
++                } catch (const std::exception& e) {
++                    std::fprintf(stderr, "strata serve: disk cache: discard entry: %s\n", e.what());
++                    disk_conversations.erase(dm.serial, "read or validation failure");
++                    disk_conversations.unguard();
++                    err.clear();
++                }
++                strata::core::progress_at("request");
++            }
+             if (incoming || borrow) slot_source = -1;
+             // Reject the entire image before parking/overwriting the outgoing
+             // state. Invalid entries can safely fall back to its existing prefix.
+@@ -16037,11 +16395,12 @@ int main(int argc, char** argv) {
+                                  (long long) strata::program::conv_cache::kRestoreFirstUseMib);
+                     auto retry = std::move(*incoming);
+                     incoming.reset();
+-                    if (!conversations.put(std::move(retry)))
++                    if (!disk_incoming && !conversations.put(std::move(retry)))
+                         std::fprintf(stderr, "strata serve: conversation cache: could not return the skipped snapshot\n");
+                     err.clear();
+                 }
+             }
++            if (!incoming && disk_incoming) { disk_conversations.unguard(); disk_incoming = 0; }
+             if (borrow) {
+                 const strata::core::SavedConversation* donor = conversations.find(parked.serial);
+                 if (donor == nullptr ||
+@@ -16286,12 +16645,19 @@ int main(int argc, char** argv) {
+                 cvec_cached = incoming->cvec;
+                 resume = parked.tokens;
+                 from_live = parked.live;
+-                if (std::getenv("STRATA_SNAPSHOT_FULL_CAPTURE") == nullptr) {
++                if (!disk_incoming && std::getenv("STRATA_SNAPSHOT_FULL_CAPTURE") == nullptr) {
+                     std::vector<std::vector<strata::core::ConversationKv>> stage_kv;   // every stage's, for its next park
+                     for (auto& si : incoming->stage_images) stage_kv.push_back(std::move(si.kv));
+                     conversations.retain(std::move(incoming->kv), int64_t(live.size()), std::move(stage_kv), live);
+                 }
+                 incoming.reset(); // Running-state/checkpoint copies are no longer needed.
++                if (disk_incoming) {
++                    disk_conversations.unguard();
++                    if (!o.conversation_cache_persist)
++                        disk_conversations.erase(disk_incoming, "restored into active session");
++                    std::fprintf(stderr, "strata serve: disk cache: restored %lld tokens in %.1f ms\n",
++                        (long long) resume, std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
++                }
+                 lent_slot = -1;   // (the main session holds the parked conversation now)
+                 std::fprintf(stderr, "strata serve: conversation cache: restored %lld tokens (%s) in %.1f ms; parked=%zu bytes=%zu\n",
+                              (long long) resume, from_live ? "live" : "checkpoint",
+@@ -19280,6 +19646,9 @@ int main(int argc, char** argv) {
+             if (o.lookup_chain > 0)
+                 std::snprintf(chain_txt, sizeof(chain_txt), " %lld %lld %lld %lld %lld", (long long) chain_ok,
+                               (long long) chain_drafts, (long long) sfx_ok, (long long) sfx_drafts, (long long) dec_windows);
++            // Commit while the live GPU state is stable, before DONE acknowledges completion. No extra full KV RAM copy.
++            // A killed process can lose this reply only if its atomic disk group has not committed yet.
++            if (o.conversation_cache_persist && !cancelled && !nan_flush && live_ok) park_disk();
+             if (yielded_at >= 0) std::printf("YIELDED %d %lld\n", yielded_slot, (long long) yielded_at);
+             std::printf("DONE %lld %lld %.1f %.1f %s %lld %lld %lld %lld %lld %lld %lld %.1f %lld %lld%s chunk=%lld "
+                         "experts_streamed=%lld\n",
+-- 
+2.53.0
+

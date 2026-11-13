@@ -1,5 +1,5 @@
 {
-  "exe": "/home/TU-USUARIO/.local/share/strata/components/engine/0.1.57-linux-x86_64-hip-rx9070/strata",
+  "exe": "/home/TU-USUARIO/.local/share/strata/components/engine/0.1.57.90-linux-x86_64-hip-rx9070/strata",
   "args": [
     "--pack",
     "/home/TU-USUARIO/Strata-data/packs/iq3_s",
@@ -18,7 +18,7 @@
     "--spec-min-p",
     "0.50",
     "--max-context",
-    "96000",
+    "94000",
     "--kv",
     "int8",
     "--kv-resident",
@@ -39,7 +39,6 @@
     "project",
     "--cvec-dir",
     "per-layer",
-    "--vision",
     "--conversation-cache-mib",
     "5376",
     "--conversation-cache-slots",
@@ -55,7 +54,10 @@
     "--draft-conf",
     "0.7",
     "--mtp-draft-vocab",
-    "/home/TU-USUARIO/Strata-data/mtp/rt/draft_vocab.bin"
+    "/home/TU-USUARIO/Strata-data/mtp/rt/draft_vocab.bin",
+    "--conversation-cache-dir",
+    "/home/TU-USUARIO/Strata-data/kv-disk",
+    "--conversation-cache-persist"
   ],
   "env": {
     "STRATA_HIP_WMMA": "1",
@@ -66,7 +68,8 @@
     "MALLOC_MMAP_THRESHOLD_": "16777216",
     "STRATA_PLE_AUTO_RAM": "0",
     "STRATA_EXPDEC": "0",
-    "STRATA_GDN_CHUNKED": "1"
+    "STRATA_GDN_CHUNKED": "1",
+    "STRATA_PREFILL_CPU_SHARE": "0"
   },
   "fit_max_tokens": true,
   "draft_vocab": "en",
@@ -85,13 +88,5 @@
   "port": 8081,
   "backend": "hip",
   "gpu": 0,
-  "gpus_asked": true,
-  "vision": {
-    "exe": "/home/TU-USUARIO/.local/share/strata/components/engine/0.1.57-linux-x86_64-hip-rx9070/strata-vision",
-    "mmproj": "/home/TU-USUARIO/Strata-data/models/mmproj-Qwen3.8-Flash-Next-Q8_0.gguf",
-    "model": "/home/TU-USUARIO/Strata-data/models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
-    "gpu": false,
-    "max_tokens": 300,
-    "threads": 8
-  }
+  "gpus_asked": true
 }
