@@ -7,10 +7,19 @@
   etiquetas v0.2.2 (motor 0.1.46), v0.2.3 (`5c8dd322`, motor 0.1.48), v0.2.4 (`96ca4383`,
   motor 0.1.48.1); después, **paquetes oficiales** sin compilar: 0.1.50 (v0.2.5),
   0.1.52 (v0.2.7), 0.1.54 (v0.2.8), 0.1.55 (v0.2.9) y, desde el 03-11/05-11, **0.1.56 y
-  0.1.57 (los de producción hoy)**, todos
+  0.1.57**, todos
   `linux-x86_64-hip-rx9070` con sha256 verificado contra el `SHA256SUMS.txt` de su release
-  (0.1.55: `88a19b89…4a77`). La documentación del clon está sincronizada con **v0.2.11**
-  (la de los motores 0.1.56/0.1.57), con el endurecimiento local reaplicado.
+  (0.1.55: `88a19b89…4a77`). Desde el 12-11, en producción un motor **propio: `0.1.57.90`**
+  = la etiqueta v0.2.11 más el parche CacheKV de un fork ajeno (ver la siguiente viñeta),
+  compilado por nosotros con el `packaging/build_hip_linux.sh` del tag
+  (`scripts/install-01590.sh`). La documentación del clon está sincronizada con **v0.2.13**
+  (sincronizada el 09-11; los motores en marcha siguen siendo los de la familia 0.1.57),
+  con el endurecimiento local reaplicado.
+- **Parche CacheKV** (el motor `0.1.57.90`): es trabajo de **kinoyu-ai**, fork público
+  [github.com/kinoyu-ai/Strata-CacheKV-kinoyu](https://github.com/kinoyu-ai/Strata-CacheKV-kinoyu).
+  Nosotros solo lo aplicamos sobre una etiqueta concreta y lo medimos; el diff que publicamos
+  en `patches/` lleva el autor original (kinoyu-ai) en el commit. No está enviado a Strata:
+  quien puede enviarlo arriba es su autor, no nosotros.
 - **Wheels GPU (ROCm/TheRock)**: la release empaqueta `7.10.0a20251120` (`gfx120X-all`);
   producción corre sobre un **runtime ROCm propio 10.3.0a20261030 con hipBLASLt 1.5.0**
   (wheels `nightly.repo.amd.com`, instalados aparte y apuntados con `lib_dirs`, sin

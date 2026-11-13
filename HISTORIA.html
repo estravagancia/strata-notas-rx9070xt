@@ -68,7 +68,7 @@
 <main>
 
 <h1>Historia de una caja</h1>
-<p class="sub">Dos semanas (del 20 de octubre al 5 de noviembre de 2026) convirtiendo un PC de casa
+<p class="sub">Tres semanas (del 20 de octubre al 13 de noviembre de 2026) convirtiendo un PC de casa
 en un servidor de inteligencia artificial. Lo que se hizo, qué se logró y qué se aprendió.
 Sin tecnicismos: los números concretos están en <a href="RESULTADOS.md">RESULTADOS.md</a>.</p>
 
@@ -77,7 +77,7 @@ Sin tecnicismos: los números concretos están en <a href="RESULTADOS.md">RESULT
 —de los que normalmente viven en servidores de una empresa— funcionase <strong>en casa</strong>,
 en un PC con una tarjeta gráfica de 16 gigabytes y 60 gigabytes de memoria, sin conexión a la nube,
 sin suscripciones y sin que nadie lea tus conversaciones por ti. El modelo elegido pesa
-75 gigabytes en disco: mucho más de lo que cabe en la tarjeta gráfica. Que funcione igual
+entre 76 y 84 gigabytes en disco según la versión: mucho más de lo que cabe en la tarjeta gráfica. Que funcione igual
 ya es, de por sí, una pequeña hazaña de ingeniería —<strong>pero esa hazaña no es nuestra</strong>.
 El mérito es de <a href="https://github.com/Niko1221/Strata">Strata</a>, un proyecto libre (licencia MIT)
 de Niko1221 y sus colaboradores, cuyo motor consigue que un modelo más grande que la memoria de la
@@ -95,7 +95,7 @@ con el equipo recién encendido y frío. Si el número mejora y no rompe nada m�
 Si no, se descarta y queda escrito el porqué. Y cada adopción lleva siempre preparada la marcha atrás:
 la copia de la configuración anterior y un guion que la restaura en un minuto.</p>
 </div>
-<p>Gracias a esa disciplina, estas dos semana incluyen varias actualizaciones que resultaron ser
+<p>Gracias a esa disciplina, estas tres semanas incluyen varias actualizaciones que resultaron ser
 <strong>negativas</strong> y que se detectaron y se deshicieron el mismo día. Sin medirlas,
 algunas habrían pasado desapercibidas durante semanas, en forma de un equipo "un poco más lento"
 cuya causa nadie sabría señalar.</p>
@@ -183,12 +183,28 @@ uso de cada día.
 </div>
 
 <div class="event">
-<span class="fecha">5 de noviembre · La última por ahora: +10,7&nbsp;% preparando textos</span> <span class="note">engine 0.1.57 oficial, anillo de preparación más profundo</span><br>
-Última versión del motor (0.1.57), otra vez medida contra la anterior el mismo día:
+<span class="fecha">5 de noviembre · El anillo de preparación: +10,7&nbsp;% preparando textos</span> <span class="note">engine 0.1.57 oficial, anillo de preparación más profundo</span><br>
+Última versión del motor (0.1.57), medida contra la anterior el mismo día:
 <span class="res">+10,7&nbsp;% en la relectura de textos de 4.000 tokens</span> (y se pasa de tardar
 1,9 s a 1,75 s en empezar a responder) gracias a un anillo más profundo que prepara los documentos
 por adelantado. En textos de 16.000 y 32.000 tokens no aporta nada: ahí el cuello de botella es otro.
 La marcha atrás preparada, por si acaso, sigue siendo una sola variable.
+</div>
+
+<div class="event">
+<span class="fecha">12 de noviembre · Un arreglo de fuera: la conversación sobrevive a apagar el PC</span> <span class="note">parche CacheKV del fork de kinoyu-ai, sobre la versión oficial v0.2.11</span><br>
+Alguien más se había encontrado con el mismo problema: al apagar el equipo se pierde la memoria de
+lo que ya se había leído, y a la mañana siguiente la primera respuesta vuelve a tardar lo que costó
+leer todo. Un fork público (<a href="https://github.com/kinoyu-ai/Strata-CacheKV-kinoyu">kinoyu-ai</a>)
+guarda esa memoria en el disco. Nos lo aplicamos nosotros sobre la versión oficial y lo compilamos
+(seis minutos). Medido con un reinicio de verdad:
+<span class="res">la relectura de una conversación de 29.000 tokens pasa de 8,7 segundos a 0,6
+(−92,7&nbsp;%)</span>; en la sesión real más larga que teníamos abierta, restaurar 41.600 tokens
+fueron 192 milisegundos. Y aquí llegó la lección incómoda: <strong>el banco de pruebas de siempre no
+veía nada</strong>, las dos mediciones salían idénticas, porque ese arreglo no cambia nada en el uso
+continuo —solo cobra por adelantado lo que se paga al encender. Hubo que inventar una prueba
+distinta (encender, apagar, volver a encender) para verlo. Escrito queda, con su protocolo en
+<a href="scripts/">scripts/</a>.
 </div>
 
 </div>
@@ -213,6 +229,13 @@ el total es una orientación, no una medida. Lo medido en frío y con control: +
 con un interruptor apagado), +3,5&nbsp;% (30 oct, runtime ROCm 10.3), +6&nbsp;% releyendo (31 oct, engine 0.1.55),
 +5,5&nbsp;% escribiendo (3 nov, engine 0.1.56 con DFlash2), +10,7&nbsp;% releyendo 4.000 tokens (5 nov, engine 0.1.57).</p>
 
+<p class="note">12 de noviembre: la producción cambió de modelo (IQ3_S, con contexto de
+94.000 en lugar de 131.000). Ese cambio <strong>bajó la velocidad</strong> —un 5,5&nbsp;% escribiendo y
+un 5,3&nbsp;% en tareas de agente— a cambio de conocer 3,2 puntos porcentuales más de palabras: se
+publicó con su medición y su criterio de aceptación fijados de antemano (techo de pérdida: 20&nbsp;%).
+Sus dos corridas completas y las del arreglo del párrafo anterior están en
+<a href="RESULTADOS.md">RESULTADOS.md</a> y en <a href="benches/muestras/">benches/muestras/</a>.</p>
+
 <p>Además de la velocidad, hay dos logros silenciosos que valen tanto como los números:</p>
 <ul>
 <li><strong>Cero sorpresas en producción.</strong> En dos semanas hubo varios intentos que salieron mal.
@@ -234,6 +257,13 @@ la respuesta casi nunca es "culpa de X"; hay que apagar X una a una.</li>
 <li><strong>Escribir los descartes</strong> es igual de valioso que escribir los éxitos: evita repetir
 el mismo error dos semanas después. Aquí hay 28 decisiones registradas y la mitad empiezan por
 "no lo adoptamos porque…".</li>
+<li><strong>El banco de pruebas no lo ve todo.</strong> La mejora más grande de noviembre en cifras
+(−92,7&nbsp;%) no aparece en ninguna de las tablas de velocidad: solo se manifiesta al encender el
+equipo. Si la prueba que tienes no puede ver el cambio, el problema puede ser la prueba.</li>
+<li><strong>Ajuses de fuera.</strong> La solución a un problema propio ya la tenía otra persona en otro
+sitio: estaba en el fork público de un desconocido, y aquí solo ha hecho falta aplicarlo, medirlo y
+darle la autoría. También hay que decir lo que eso significa: no es código del proyecto original y no
+está enviado arriba.</li>
 </ul>
 
 <p>Tampoco fue perfecto: al cerrar estas notas estaba abierto un caso raro —una respuesta sin sentido
@@ -242,7 +272,8 @@ momento conocida (comprimir antes). Queda abierto y documentado, como todo lo de
 esconde nada.</p>
 
 <footer>
-Crónica escrita el 5 de noviembre de 2026 a partir del cuaderno de sesiones del proyecto (append-only,
+Crónica escrita el 5 de noviembre de 2026 y ampliada el 12 y 13 de noviembre con la última entrada,
+a partir del cuaderno de sesiones del proyecto (append-only,
 desde el 20 de octubre). Todas las cifras son mediciones de esta caja con RX 9070 XT y el motor que
 se indica en cada fecha; donde algo no está medido, se dice. Todo esto se sostiene sobre hombros
 ajenos: el motor y el servidor son de <a href="https://github.com/Niko1221/Strata">Strata</a> (MIT,

@@ -124,16 +124,41 @@ Lecturas:
   ruido (±0,2 %). El primer token de 4K baja de 1,94 a 1,75 s; el de 32K se queda en
   ~10,5 s.
 
-## Medida de producción actual (05-11, con IQ3_XXS, contexto 131.072)
+## Medida de producción actual (12-11, con **IQ3_S**, contexto 94.000)
+
+Motor **0.1.57.90** (v0.2.11 + el parche CacheKV del fork kinoyu, ver
+[LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §10) + `STRATA_GDN_CHUNKED=1` + `STRATA_EXPDEC=0` +
+`STRATA_PREFILL_CPU_SHARE=0` + drafter **DFlash2**, **sin visión**, sobre ROCm 10.3 propio.
+Números de la corrida auditada `run2` de la pareja del 12-11 (muestra
+`benches/muestras/cachekv-0.1.57-ctrl-iq3s/`; la otra columna es el brazo `.90`, y entre
+ellas todas las diferencias están dentro del ruido — lo que aporta el parche es el
+prefill tras reinicio, no el tok/s):
+
+| Métrica | 0.1.57 oficial | 0.1.57.90 (producción) |
+|---|---|---|
+| chat tok/s (mediana de 9) | 78,0 (70,1-109,3) | 79,0 (74,6-110,1) |
+| chat tok/s (media de los 9) | 86,6 | 88,2 |
+| prefill 4K tok/s · primer token | 2.441,8 · 1,67 s | 2.437,8 · 1,67 s |
+| prefill 16K tok/s · primer token | 3.457,1 · 4,67 s | 3.461,1 · 4,67 s |
+| agente tok/s (mediana, 15 turnos) | 86,8 | 88,0 |
+| agente acierto de caché | 69,78 % | 69,74 % |
+
+No medido en esta config: 32K (la pareja no usó `--long`). Con las dos flags del CacheKV
+activas, el primer request tras un arranque en frío deja de pagar el prefill de la
+conversación: `41612 reused + 36 read en 894 ms` frente a los ~9 s de prefill frío de un
+prompt equivalente (medido con reinicio, no con `strata_bench.py`).
+
+## Medida de producción anterior (05-11, con IQ3_XXS, contexto 131.072)
 
 Motor **0.1.57** + `STRATA_GDN_CHUNKED=1` + `STRATA_EXPDEC=0` + drafter **DFlash2** sobre
 ROCm 10.3 propio (medias de `-anillo-0157`, con `--long`): chat **82,2** tok/s (rango
 74,7-125,3), prefill **2.322,6** (4K), **3.098,8** (16K) y **3.055,5** (32K), primer
 token **1,75 s / 5,21 s / 10,52 s**.
 
-Nota: la producción alterna **IQ3_XXS** e **IQ3_S**. Todas las medidas de este archivo
-corresponden a IQ3_XXS; no hay bench auditado de IQ3_S (solo la medida informal del 26-10,
-ver [PASOS.md](PASOS.md)).
+Nota: desde el 12-11 la producción es **IQ3_S** (ver la sección anterior). Las medidas de
+las secciones de series corresponden a **IQ3_XXS**; la única excepción son las dos corridas
+del 12-11, sobre IQ3_S con contexto 94.000. La medida informal de IQ3_S del 26-10
+(~+17 % en 16K con la config de entonces) quedó desfasada: ver [PASOS.md](PASOS.md).
 
 El estado anterior (31-10, motor 0.1.55): chat 80,5-81,7, prefill 2.025-2.051 (4K) y
 2.966-2.977 (16K), primer token 1,98-2,01 s / 5,42-5,46 s; medida puntual del servidor

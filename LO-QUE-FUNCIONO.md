@@ -152,3 +152,79 @@ es otro (PCIe/swap de expertos) y el anillo no lo mueve. Es la mayor ganancia de
 desde GDN; nuestro +10,7 % en 4K queda por debajo del +16 % que mide upstream en R9700,
 pero en la misma dirección. Si algún día da problemas, el rollback es una variable:
 `STRATA_GFX12_RING=0`.
+
+## 10. El KV de la conversación sobrevive a un reinicio (motor 0.1.57.90, parche CacheKV de un fork)
+
+**Qué:** Strata aparca el KV de las conversaciones inactivas en un anillo de RAM
+(`--conversation-cache-mib`), que se pierde al apagar el motor. Un parche de un fork
+ajeno — [kinoyu-ai/Strata-CacheKV-kinoyu](https://github.com/kinoyu-ai/Strata-CacheKV-kinoyu) —
+añade un nivel de disco que **sobrevive al reinicio**: dos flags nuevas,
+`--conversation-cache-dir <dir>` y `--conversation-cache-persist`, que espejan al final de
+cada respuesta las conversaciones aparcadas y las restauran al volver a arrancar.
+**No es un parche de Strata y no está enviado arriba**: lo aplicamos nosotros sobre la
+etiqueta v0.2.11 (el diff está en [patches/](patches/CacheKV-fork-kinoyu-sobre-v0.2.11.patch)).
+
+**Cómo se monta sin recompilar a mano:** `scripts/install-01590.sh` aplica el diff sobre el
+checkout de la etiqueta y compila con el `packaging/build_hip_linux.sh` del propio tag →
+componente `0.1.57.90-linux-x86_64-hip-rx9070` (~6 min en esta caja). Un detalle que
+descoloca: el binario se declara **`0.1.57`** en `--version` y en los logs (el `.90` solo
+consta en su `BUILD.json`), así que `engine_version: 0.1.57` en el health del servidor es
+lo esperado, no un fallo. La config con las flags activas es la de
+[configs/strata-iq3_s.json](configs/strata-iq3_s.json).
+
+**Cuánto — el test es con reinicio, así que no lo hace `strata_bench.py`:** hay un script
+aparte, `scripts/kv-persist-test.sh` (arranca el motor → conversación larga → apagado
+normal → segundo arranque → reenvío del mismo prompt). Con el mismo prompt de 29.347
+tokens tras el reinicio (12-11, IQ3_S, contexto 94.000):
+
+| | 0.1.57 oficial (control) | 0.1.57.90 con CacheKV |
+|---|---|---|
+| restaurar desde disco | no existe | **29.340 tokens en 245,5 ms** |
+| leer el prompt | 0 reused + 29.347 read en **8.662 ms** | **29.340 reused + 7 read en 634 ms** |
+| prefill | — | **−92,7 %** |
+
+En el uso de verdad (no un bench), en la sesión real más larga que teníamos abierta:
+
+```
+disk cache: restored 41612 tokens in 191.6 ms
+prompt 41648 tokens = 41612 reused + 36 read in 894 ms
+```
+
+O sea: el primer request después de encender el PC vuelve a coste de un request normal.
+En frío ese prompt costaría ~9 s de prefill (es lo que mide el control del test anterior);
+aquí son 894 ms, de los cuales 191,6 ms son restaurar del disco. El ahorro **no está en el
+tok/s**, está en el primer token tras cada arranque — por eso la métrica útil es esta y no
+la tabla del A/B.
+
+**Cuánto cuesta en lo demás (A/B en frío, 12-11, IQ3_S, contexto 94.000, run2 auditada en
+ambos brazos, en `benches/muestras/cachekv-0.1.57-ctrl-iq3s/` y
+`cachekv-0.1.57.90-iq3s/`):**
+
+| Métrica | Control 0.1.57 | 0.1.57.90 | Diferencia |
+|---|---|---|---|
+| 4K tok/s | 2.441,8 | 2.437,8 | −0,2 % (plano) |
+| 16K tok/s | 3.457,1 | 3.461,1 | +0,1 % (plano) |
+| primer token 4K / 16K | 1,67 s / 4,67 s | 1,67 s / 4,67 s | sin cambio |
+| chat tok/s | 78,0 (70,1-109,3) | 79,0 (74,6-110,1) | dentro del rango |
+| agente tok/s | 86,8 (71,5-112,4) | 88,0 (70,1-114,6) | dentro del rango |
+| agente acierto de caché % | 69,78 | 69,74 | sin cambio |
+
+Sin las flags el código nuevo no toca nada y con ellas el camino caliente es el mismo: los
+números dicen que el coste es cero y el beneficio solo aparece al reiniciar. Es la primera
+vez en esta caja que una mejora no se ve en el bench estándar y hay que medirla con un
+protocolo propio.
+
+**Lo que hay que saber:**
+- El disco **se autolimita**: `--conversation-cache-disk-mib` (default 12.288 MiB) es un
+  techo duro con autoexpulsión, y `--conversation-cache-disk-min-free-mib` deja siempre
+  512 MiB libres. No hace falta ninguna política de limpieza nuestra: tras un día de uso
+  real con varias sesiones abiertas ocupaba **10,8 GiB con 10 entradas**, por debajo del
+  techo y sin que tengamos que hacer nada. Si alguna vez trabajas con varias sesiones de
+  ~1,5 GB a la vez y quieres que no se desalojen entre ellas, sube el techo (p. ej.
+  `--conversation-cache-disk-mib 30720`).
+- La restauración es de la **conversación aparcada**, no de un prompt cualquiera: si el
+  prompt no coincide con lo espejado, no hay nada que reutilizar.
+- No probado sobre motores 0.1.58/0.1.59 (que aquí se rechazaron por otro motivo), ni en
+  32K (la pareja del A/B no usó `--long`).
+- El rollback: quitar las dos flags y volver al componente `0.1.57` (nuestro backup de la
+  config es `strata-iq3_s.json.pre-cachekv-20261112.bak`).

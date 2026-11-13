@@ -159,9 +159,41 @@ dentro del ruido (±0,2 %); chat 82,2 vs 79,3. Se adoptó. Desde ese día el scr
 medida añade el prompt de 32K (`--long`): **3.055,5 tok/s, 10,5 s hasta el primer
 token**. Muestras: `benches/muestras/engine-0.1.57-ring0` y `engine-0.1.57-anillo`.
 
+## 12-11 — Producción en IQ3_S y el KV en disco que sobrevive a los reinicios
+
+Dos cosas el mismo día. Primero cerramos el A/B de modelo (IQ3_S frente a IQ3_XXS):
+**chat −5,5 % y agente −5,3 %** a cambio de **+3,2 pp** de tokens conocidos, con el techo
+de pérdida fijado en −20 % de antemano → **IQ3_S pasa a producción** (contexto 94.000,
+sin visión; IQ3_XXS queda como alternativa para contexto largo). Sus dos primeras corridas
+auditadas son las primeras sobre IQ3_S: `benches/muestras/cachekv-0.1.57-ctrl-iq3s` y
+`cachekv-0.1.57.90-iq3s`.
+
+Segundo: un fork ajeno, **kinoyu-ai/Strata-CacheKV-kinoyu**, añade un nivel de disco al
+caché de conversación que **sobrevive al reinicio** del motor. Lo aplicamos sobre la
+etiqueta v0.2.11 (diff en `patches/CacheKV-fork-kinoyu-sobre-v0.2.11.patch`, autor
+original kinoyu-ai) y lo compilamos con el script del propio tag → motor propio
+**`0.1.57.90`** (~6 min; el binario se declara `0.1.57`, ver §10 de
+[LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md)).
+
+Aquí llegó el problema metodológico: **el A/B estándar no ve nada**. Las dos parejas
+quedan planas (4K −0,2 %, 16K +0,1 %, chat y agente dentro del rango), porque el parche no
+afecta al camino caliente: lo que hace es cobrar el prefill ya pagado. Hubo que inventar un
+protocolo (`scripts/kv-persist-test.sh`: arrancar → conversación larga → apagado normal →
+segundo arranque → el mismo prompt): **0 reused + 29.347 read en 8.662 ms** frente a
+**29.340 reused + 7 read en 634 ms → −92,7 %**. En la sesión real más larga que teníamos
+abierta, `restored 41612 tokens in 191.6 ms` y el primer request en 894 ms. Aprobado con
+reserva en la métrica de agente (media −1,44 % / mediana +0,42 %, ambigua) y registrado así.
+
+Dos detalles que vale la pena anotar porque sorprenden: el disco **se autolimita solo**
+(techo duro con autoexpulsión + 512 MiB siempre libres, sin política de limpieza nuestra),
+y la restauración solo sirve si el prompt **coincide** con lo espejado.
+
 ## Lección de fondo (octubre y principios de noviembre)
 
-**Casi todo lo que prometía era ruido, y lo que funcionó son ocho cosas concretas y
+**Casi todo lo que prometía era ruido, y lo que funcionó son nueve cosas concretas y
 medidas**: la tabla C2, el subset español, la reserva/flags de la config final, el
-protocolo de medición en sí, el runtime ROCm propio, GDN gfx12, el drafter DFlash2 y el
-anillo de prompt más profundo.
+protocolo de medición en sí, el runtime ROCm propio, GDN gfx12, el drafter DFlash2, el
+anillo de prompt más profundo y el KV en disco persistente. Y una advertencia que aprendimos
+sobre la marcha: una mejora real puede ser **invisible para el bench estándar**; si el
+cambio actúa sobre el arranque y no sobre el camino caliente, hay que medirlo con un
+protocolo propio.
