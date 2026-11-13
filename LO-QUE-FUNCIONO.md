@@ -196,6 +196,38 @@ aquí son 894 ms, de los cuales 191,6 ms son restaurar del disco. El ahorro **no
 tok/s**, está en el primer token tras cada arranque — por eso la métrica útil es esta y no
 la tabla del A/B.
 
+**Los dos niveles en la práctica (13-11, logs de producción en vivo — no protocolo de
+bench frío; fuente: `strata-iq3_s.log`):** al día siguiente de publicarlo lo probamos en
+vivo y quedó clara la frontera entre el nivel de RAM y el de disco:
+
+| Situación real (13-11 00:14–00:16, IQ3_S) | Lo que mostró el log |
+|---|---|
+| Sin reiniciar, sesión de 55.208 tokens con la capa de RAM desalojando (`evictions=12` en esa sesión) | `0 reused + 55208 read en 15800 ms` — prefill frío completo (~3.494 tok/s) |
+| Reinicio 00:14, sesión de ~60k | `restored 59944 tokens in 279.8 ms` → primer request `61708 = 59944 reused + 1764 read en 2297 ms` (~2,3 s frente a ~17-18 s esperados en frío a ese tamaño, estimado sobre los 3.494 tok/s medidos arriba) |
+| Reinicio 00:16, la misma sesión ya en 64k y el disco lleno | `indexed 12 entries, 10.85 GB`; dos expulsiones `LRU capacity` (entradas de 63.851 y 85.148 tok); `restored 64212 tokens in 353.7 ms` → primer request `64244 = 64212 reused + 32 read en 1122 ms` (~1,1 s frente a ~18 s estimado en frío) |
+
+Qué se sigue de esto, y qué no:
+
+- **Durante una sesión viva manda la capa de RAM** (`--conversation-cache-mib`): si se
+  agota, el request va completamente frío y el nivel de disco no la sustituye a mitad de
+  sesión — su papel documentado es espejar al final de cada respuesta y restaurar al
+  arrancar. (El caso de 55k fue un error de prueba: se esperaba reutilización sin
+  reiniciar.) Que el disco no atienda mid-sesión es lo observado, no un mecanismo afirmado.
+- **Al reiniciar, el disco persiste y devuelve la conversación en cientos de ms**, con el
+  primer request a coste casi normal incluso con el disco por encima del techo y expulsión
+  LRU en curso.
+- **Techo medido, no solo declarado**: con el default de 12.288 MiB y sesiones de 60k–85k
+  (1,1-1,5 GB por entrada) caben ~8-10 entradas y **las expulsiones LRU ya empezaban en
+  ese arranque**. Si trabajas con varias sesiones grandes a la vez y no quieres que se
+  desalojen entre ellas, sube el techo: `--conversation-cache-disk-mib 30720`
+  (`df /`: 200 G libres, no urge).
+- **Matiz del umbral, sin afirmar mecanismo**: el motor declara el nivel de disco en el
+  arranque como `minimum 60001 tokens; mirrors RAM-eligible conversations at reply
+  boundaries`, pero en el mismo log se aparca una entrada de 55.656 tokens y se restaura
+  una de 59.944 (etiquetada `(checkpoint)`, por debajo del mínimo declarado). El
+  comportamiento exacto de ese umbral no lo aclara el log: no afirmamos por qué una
+  sesión de ~55-60k se espeja o no.
+
 **Cuánto cuesta en lo demás (A/B en frío, 12-11, IQ3_S, contexto 94.000, run2 auditada en
 ambos brazos, en `benches/muestras/cachekv-0.1.57-ctrl-iq3s/` y
 `cachekv-0.1.57.90-iq3s/`):**

@@ -207,6 +207,21 @@ distinta (encender, apagar, volver a encender) para verlo. Escrito queda, con su
 <a href="scripts/">scripts/</a>.
 </div>
 
+<div class="event">
+<span class="fecha">13 de noviembre · Y al día siguiente, funcionando solo</span> <span class="note">uso real, no una prueba de banco</span><br>
+Comprobamos el arreglo usándolo de verdad, y salió una frontera útil. <strong>Sin apagar el
+equipo</strong>, una conversación muy larga a la que la memoria rápida ya no llegaba volvió a
+tardar lo de siempre: quince segundos de lectura completa. (Era una expectativa nuestra
+equivocada: lo que guarda el disco entra en juego al encender, no a mitad de una charla.)
+<strong>Apagando y volviendo a encender</strong>, en cambio, funcionó tal cual: una conversación
+de 64.000 tokens se recuperó del disco en tres décimas de segundo, y la
+primera pregunta tardó <span class="res">un segundo en vez de unos dieciocho</span>. Y se vio
+el límite honesto del sistema: el espacio que el programa se asigna a sí mismo para esto
+(12 gigabytes, por defecto) se llena con ocho o diez conversaciones así de grandes, y entonces
+empieza a desalojar las más antiguas —sin romperse nada, y con una opción para ampliarlo si
+algún día hiciera falta.
+</div>
+
 </div>
 
 <h2>Qué se logró, en números comprensibles</h2>

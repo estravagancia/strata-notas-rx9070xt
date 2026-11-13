@@ -188,6 +188,24 @@ Dos detalles que vale la pena anotar porque sorprenden: el disco **se autolimita
 (techo duro con autoexpulsión + 512 MiB siempre libres, sin política de limpieza nuestra),
 y la restauración solo sirve si el prompt **coincide** con lo espejado.
 
+## 13-11 — Confirmación en vivo de los dos niveles (logs de producción, no bench)
+
+Al día siguiente lo probamos usándolo de verdad, y quedó la frontera entre capas
+(detalle completo con las cifras en §10 de [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md)):
+
+- **Sin reiniciar**, una sesión de 55k con la capa de RAM desalojando fue a prefill frío
+  completo (~15,8 s): durante la sesión viva manda la RAM; el disco no la sustituye a
+  mitad de sesión (era una espera errónea nuestra, no un fallo del parche).
+- **Reiniciando**, el disco devuelve la conversación en cientos de ms y el primer request
+  baja de ~17-18 s a **2,3 s** (sesión de ~60k) y a **1,1 s** (misma sesión ya en 64k,
+  con el disco lleno y expulsión LRU en curso).
+- El techo default de 12.288 MiB **sí se alcanza en uso real** con sesiones de 60k+:
+  caben ~8-10 entradas y las expulsiones LRU empezaron ese mismo arranque. Palanca:
+  `--conversation-cache-disk-mib 30720` (200 G libres en `/`, no urge subirlo).
+- Dónde termina el umbral declarado del disco (`minimum 60001 tokens`) no lo aclara el
+  log: se ven entradas aparcadas y restauradas por debajo. Lo registramos como matiz,
+  sin afirmar el mecanismo.
+
 ## Lección de fondo (octubre y principios de noviembre)
 
 **Casi todo lo que prometía era ruido, y lo que funcionó son nueve cosas concretas y
