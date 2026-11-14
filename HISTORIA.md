@@ -147,9 +147,12 @@ Comprobamos el arreglo usándolo de verdad, y salió una frontera útil. **Sin a
 equipo**, una conversación muy larga a la que la memoria rápida ya no llegaba volvió a
 tardar lo de siempre: quince segundos de lectura completa. (Era una expectativa nuestra
 equivocada: lo que guarda el disco entra en juego al encender, no a mitad de una charla.)
-**Apagando y volviendo a encender**, en cambio, funcionó tal cual: una conversación
-de 64.000 tokens se recuperó del disco en tres décimas de segundo, y la
-primera pregunta tardó **un segundo en vez de unos dieciocho**. Y se vio
+**Apagando y volviendo a encender**, en cambio, funcionó tal cual —y con un registro
+aún mayor del que habíamos anotado. Aquella primera marca (64.000 tokens en tres décimas)
+se quedó corta: en otro reinicio, **77.944 tokens se recuperaron del disco en 287
+milisegundos**, todavía por debajo de las tres décimas, y la primera pregunta tardó
+**un segundo en vez de unos dieciocho**. La mayor recuperación que hemos llegado a ver en
+los registros es de **81.166 tokens en 629 milisegundos**. Y se vio
 el límite honesto del sistema: el espacio que el programa se asigna a sí mismo para esto
 (12 gigabytes, por defecto) se llena con ocho o diez conversaciones así de grandes, y entonces
 empieza a desalojar las más antiguas —sin romperse nada, y con una opción para ampliarlo si
