@@ -67,9 +67,6 @@ larga y más útil, de cosas que se midieron y **no** mejoraron nada.
    medidas (bench en frío, y el test con reinicio que necesita el KV en disco).
 7. [benches/muestras/](benches/muestras/) — 11 mediciones completas para que audites las tablas.
 8. [CREDITOS.md](CREDITOS.md) — de dónde viene cada pieza.
-9. [LA-ANALOGIA-CON-LAS-PERSONAS.md](LA-ANALOGIA-CON-LAS-PERSONAS.md) — una nota divulgativa:
-   cómo las tres capas de esta máquina (VRAM/RAM/disco) explican a las personas que son
-   «la memoria» de un LLM, y dónde se rompe esa analogía.
 
 ## Estado actual (12-11-2026)
 
