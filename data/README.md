@@ -17,7 +17,7 @@ español (31 MB) más el vocabulario del modelo; se quedaron los ids que realmen
 aparecen en español (el estándar cubre 106.299; el subset, 50.847 → solo el 0,54 % de
 los tokens de chats reales quedaron fuera, frente al 11,7 % del listado "en" oficial).
 El resultado: +0,8 % en chat, +2,8 pp de borradores aceptados, −93 MiB de VRAM
-(una corrida limpia; pendiente de confirmar con más muestras).
+(una ejecución limpia; pendiente de confirmar con más muestras).
 
 Nota honesta: el guion generador se perdió (no estaba en git). La receta es la de
 arriba y el formato es público; si alguien lo rehace en su idioma, este fichero sirve

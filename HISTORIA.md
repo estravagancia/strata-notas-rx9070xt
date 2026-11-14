@@ -182,7 +182,7 @@ con un interruptor apagado), +3,5 % (30 oct, runtime ROCm 10.3), +6 % releyendo 
 94.000 en lugar de 131.000). Ese cambio **bajó la velocidad** —un 5,5 % escribiendo y
 un 5,3 % en tareas de agente— a cambio de conocer 3,2 puntos porcentuales más de palabras: se
 publicó con su medición y su criterio de aceptación fijados de antemano (techo de pérdida: 20 %).
-Sus dos corridas completas y las del arreglo del párrafo anterior están en
+Sus dos ejecuciones completas y las del arreglo del párrafo anterior están en
 [RESULTADOS.md](RESULTADOS.md) y en [benches/muestras/](benches/muestras/).*
 
 Además de la velocidad, hay dos logros silenciosos que valen tanto como los números:

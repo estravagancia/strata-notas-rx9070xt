@@ -1,6 +1,6 @@
 # Muestras de bench (para auditar las tablas)
 
-Doce corridas auditadas, en el formato `results.json` "schema 1" de
+Doce ejecuciones auditadas, en el formato `results.json` "schema 1" de
 `tools/strata_bench.py`: cada una contiene 3 pasadas por métrica, la máquina
 (GPU/CPU/RAM/OS), la versión del motor y los detalles del arranque (ranuras de
 expertos, `pcie_frac`, cachés…). Las tres últimas son las **primeras sobre IQ3_S**
@@ -20,14 +20,14 @@ con visión en GPU (`images: true`), un factor más al comparar entre series.
 | `engine-0.1.57-anillo/` | `-anillo-0157` (05-11) | 0.1.57 con el anillo de prompt por defecto, 256/192/96 (adoptado; usa `--long`) |
 | `cachekv-0.1.57-ctrl-iq3s/` | `-ctrl-0157-iq3s` (12-11) | 0.1.57 oficial con **IQ3_S** y contexto 94.000 (control; sin visión) |
 | `cachekv-0.1.57.90-iq3s/` | `-test-015790-iq3s` (12-11) | 0.1.57.90 = v0.2.11 + **parche CacheKV del fork kinoyu** (adoptado; sin visión) |
-| `long-0.1.57.90-iq3s/` | `-test-015790-iq3s` (13-11) | la misma config de producción, corrida suelta en frío con `--long` (añade el 32K; no es A/B) |
+| `long-0.1.57.90-iq3s/` | `-test-015790-iq3s` (13-11) | la misma config de producción, ejecución suelta en frío con `--long` (añade el 32K; no es A/B) |
 
 Hay cuatro A/B publicados por parejas: el del 31-10 (GDN chunked), el del 03-11 (DFlash2
 frente al cabezal MTP), el del 05-11 (anillo de prompt) y el del 12-11 (KV en disco
 persistente, el primero sobre IQ3_S). Comparar solo dentro de la misma pareja: arrastran
 cambios de contexto, runtime o protocolo (las dos del 05-11 usan `strata_bench.py --long`
 e incluyen el prompt de 32K; las anteriores no; las dos del 12-11 van **sin** `--long`, así
-que no tienen 32K — la única corrida sobre la config actual con 32K es la suelta del 13-11,
+que no tienen 32K — la única ejecución sobre la config actual con 32K es la suelta del 13-11,
 que además arrancó con ~1 GiB menos de RAM libre y el motor le bajó el chunk de prompt de
 16.384 a 8.192, así que su 32K es cota baja). En la pareja del 12-11 las tablas salen
 planas a propósito: lo que
@@ -35,7 +35,7 @@ aporta ese parche no se ve en un bench continuo, se ve tras un reinicio (ver
 `scripts/kv-persist-test.sh`).
 
 Qué mirar si quieres repetir el experimento: `machine.engine_version`, `context`,
-`expert_slots` y `machine.engine_info.images` (deben coincidir con la corrida que
+`expert_slots` y `machine.engine_info.images` (deben coincidir con la ejecución que
 quieras comparar), y el bloque de resultados por métrica. El `README.md` de cada carpeta es el resumen que generamos en
 su momento; el detalle del protocolo (run1 descartada, auditoría del log) está en la
 raíz del repo.

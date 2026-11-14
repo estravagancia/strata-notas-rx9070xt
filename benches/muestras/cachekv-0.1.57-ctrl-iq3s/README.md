@@ -61,4 +61,4 @@ Control de la pareja del 12-11 sobre **IQ3_S, contexto 94.000, sin visión**: mo
 **0.1.57 oficial**. Su gemelo con el parche CacheKV (motor propio **0.1.57.90**) está en
 `../cachekv-0.1.57.90-iq3s/`. La ganancia real de ese experimento no está en estas
 tablas (son planas): se mide con reinicio, en `../../scripts/kv-persist-test.sh`.
-Corrida `run2` auditada; `run1` fue el calentamiento y se descartó.
+Ejecución `run2` auditada; `run1` fue el calentamiento y se descartó.

@@ -7,7 +7,7 @@
 | Placa base | ASUS **PRIME X870-P WIFI** (BIOS 1644, 03/2026) |
 | RAM | **64 GB** DDR5 — Corsair Vengeance RGB, 6400 MHz, 2×32 GB (dual channel) |
 | Almacenamiento | NVMe **Crucial T700 1 TB** (PCIe Gen5, `CT1000T700SSD5`): ahí viven los modelos, sus packs y la caché KV de disco (`/`, 184 GB libres a 13-11). |
-| Sistema | Ubuntu Linux, kernel 7.0.0-43 (x86_64, el de las corridas de noviembre; las de octubre fueron con 7.0.0-38 y 7.0.0-42) |
+| Sistema | Ubuntu Linux, kernel 7.0.0-43 (x86_64, el de las ejecuciones de noviembre; las de octubre fueron con 7.0.0-38 y 7.0.0-42) |
 | Driver | amdgpu (sin ROCm del sistema; ver más abajo) |
 
 Nota: donde otras notas hablan de "60 GB de RAM" se refieren a lo que el modelo llega a

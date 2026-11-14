@@ -58,12 +58,12 @@ Not measured: this is a speed suite. The conversation uses the model's own repli
 
 ## Nota de esta muestra (añadida al auditarla)
 
-Corrida suelta en frío del 13-11 con `--long`, con la config de producción del 12-11 y la
+Ejecución suelta en frío del 13-11 con `--long`, con la config de producción del 12-11 y la
 producción intacta en otro puerto. No es un A/B: sirve solo para cerrar el 32K que la
 pareja del 12-11 no midió.
 
 Condición que hay que tener en cuenta al comparar: quedaban ~8.804 MiB libres de RAM al
-arrancar (en la corrida del 12-11, ~9.815), y el motor adaptó solo el tamaño de chunk de
+arrancar (en la ejecución del 12-11, ~9.815), y el motor adaptó solo el tamaño de chunk de
 prompt de 16.384 a 8.192 (línea del `server.log`, política `gfx12`, ajustable con
 `STRATA_GFX12_CHUNK`). En este mismo run el 16K dio 3.220 tok/s frente a los 3.461 de la
 muestra `cachekv-0.1.57.90-iq3s/`, un 6,7 % menos. El 32K de esta muestra (3.161,1 en la

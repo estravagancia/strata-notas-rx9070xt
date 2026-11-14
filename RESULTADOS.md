@@ -5,8 +5,8 @@
 - Herramienta: `tools/strata_bench.py` del propio Strata (3 pasadas por cada prueba;
   el informe guarda `results.json` con el esquema "schema 1").
 - **Consola fría**: producción parada, OpenCode/agentes parados, servidor exclusivo de
-  la corrida con su propio log. Script: `scripts/run-bench.sh`.
-- 2 corridas por sesión: **run1 = calentamiento (se descarta), run2 = la válida**, tras
+  la ejecución con su propio log. Script: `scripts/run-bench.sh`.
+- 2 ejecuciones por sesión: **run1 = calentamiento (se descarta), run2 = la válida**, tras
   auditar el `server.log` (cero prompts ajenos ≥20k tokens) y el `meta.txt` (engine,
   config con sha256, flags reales).
 - El "chat" de las tablas es la **media de los 9 requests de conversación** del bench;
@@ -26,7 +26,7 @@
 
 ## Serie 23-10 → 25-10 (IQ3_XXS, contexto 98.304, wheels 7.10)
 
-| Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+| Ejecución (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
 |---|---|---|---|---|---|
 | `-anclaje98` (23-10) | 0.1.48 | 74,6 | 1.957,7 | 2.409,4 | referencia del protocolo |
 | `-iqpc0` (24-10) | 0.1.49 | **78,1** | 1.924,1 | 2.375,1 | control A/A del día del popcount |
@@ -67,7 +67,7 @@ números de prefill son limpios):
 La config pasa a: contexto 131.072, `--spec-min-p 0.50`, reserva 1.536 MiB, `--kv int8`,
 `--kv-resident 16384`, `STRATA_EXPDEC=0`, `STRATA_PLE_AUTO_RAM=0`, `STRATA_HIP_WMMA=1`.
 
-| Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+| Ejecución (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
 |---|---|---|---|---|---|
 | `-0150-control` (27-10) | 0.1.50 | 79,1 | 2.002,4 | 2.789,8 | control de la config nueva |
 | `-0152-new` (27-10) | 0.1.52 | 72,1 | — | — | defaults nuevos de gfx12 → **−8,8 % chat**, no adoptado |
@@ -83,7 +83,7 @@ El 30-10 el motor oficial corre sobre un runtime ROCm propio (10.1 y luego 10.3 
 hipBLASLt 1.5.0) sin recompilar; el 31-10 llega el motor 0.1.55 con la ruta GDN chunked
 en gfx12.
 
-| Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+| Ejecución (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
 |---|---|---|---|---|---|
 | `-0154-plain` / `-b` (30-10) | 0.1.54 | 80,4 / 79,2 | 2.009,3 / 1.974,0 | 2.793,5 / 2.783,9 | wheels 7.10, control |
 | `-0154-specp70-a/-b` (30-10) | 0.1.54 | −0,1 % / +2,4 % | plano | plano | `--spec-min-p 0.70` → neutro, se queda 0,50 |
@@ -110,11 +110,11 @@ Lecturas:
 El 03-11, A/B en el mismo día del drafter **DFlash2** (pack `q4_0` dedicado,
 `--draft-fallback none`, `--draft-conf 0.7`) contra el cabezal MTP de siempre. El 05-11,
 con el motor **0.1.57** instalado, A/B del **anillo de preparación de prompt de gfx12**
-(256/192/96 ranuras por defecto; control: `STRATA_GFX12_RING=0`). Las corridas del 05-11 usan `strata_bench.py --long`,
+(256/192/96 ranuras por defecto; control: `STRATA_GFX12_RING=0`). Las ejecuciones del 05-11 usan `strata_bench.py --long`,
 que añade el prompt de 32K; las anteriores no son comparables en esa métrica. Muestras
 completas en [benches/muestras/](benches/muestras/).
 
-| Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+| Ejecución (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
 |---|---|---|---|---|---|
 | `-mtp-0156-control` (03-11) | 0.1.56 | 77,0 | 2.046,1 | 3.041,5 | cabezal MTP (control del A/B) |
 | `-df2-0156-draft` (03-11) | 0.1.56 | **81,2** | 2.040,8 | 3.071,4 | `--draft dflash2` → **+5,5 % chat (mediana)**, 4K/16K planos, **adoptado** |
@@ -135,7 +135,7 @@ Lecturas:
 Motor **0.1.57.90** (v0.2.11 + el parche CacheKV del fork kinoyu, ver
 [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §10) + `STRATA_GDN_CHUNKED=1` + `STRATA_EXPDEC=0` +
 `STRATA_PREFILL_CPU_SHARE=0` + drafter **DFlash2**, **sin visión**, sobre ROCm 10.3 propio.
-Números de la corrida auditada `run2` de la pareja del 12-11 (muestra
+Números de la ejecución auditada `run2` de la pareja del 12-11 (muestra
 `benches/muestras/cachekv-0.1.57-ctrl-iq3s/`; la otra columna es el brazo `.90`, y entre
 ellas todas las diferencias están dentro del ruido — lo que aporta el parche es el
 prefill tras reinicio, no el tok/s):
@@ -150,16 +150,16 @@ prefill tras reinicio, no el tok/s):
 | agente tok/s (mediana, 15 turnos) | 86,8 | 88,0 |
 | agente acierto de caché | 69,78 % | 69,74 % |
 
-† El 32K no lo midió la pareja del 12-11 (no usó `--long`). Lo midió el 13-11 una corrida
+† El 32K no lo midió la pareja del 12-11 (no usó `--long`). Lo midió el 13-11 una ejecución
 de banco en frío con `--long`, con la misma config de producción y la producción intacta
 en otro puerto
 ([benches/muestras/long-0.1.57.90-iq3s/](benches/muestras/long-0.1.57.90-iq3s/): media
-3.163,4, rango 3.156,7-3.172,5). Ojo con la comparación: en esa corrida quedaban ~8,8 GiB
+3.163,4, rango 3.156,7-3.172,5). Ojo con la comparación: en esa ejecución quedaban ~8,8 GiB
 libres de RAM al arrancar (en la del 12-11, ~9,8) y el motor bajó solo el tamaño de chunk
 de prompt de 16.384 a 8.192; en ese mismo run el 16K dio 3.220 tok/s, un 6,7 % por debajo
 del valor de la tabla. El 32K hay que leerlo como **cota baja** en esas condiciones de
 memoria. Aun así supera en ~3,4 % al 3.055,5 de la config anterior con IQ3_XXS y anillo
-profundo (05-11). El resto de métricas de esa corrida cuadra con la tabla: chat 88,4 de
+profundo (05-11). El resto de métricas de esa ejecución cuadra con la tabla: chat 88,4 de
 media y 80,3 en la mediana, acierto del agente 69,74 %; la decodificación por turno del
 agente salió más baja (79,6 de mediana frente a 88,0), pero es la métrica más ruidosa de
 todas (depende de cuántos borradores acepta el drafter en cada turno) y no la usamos para
@@ -185,7 +185,7 @@ ROCm 10.3 propio (medias de `-anillo-0157`, con `--long`): chat **82,2** tok/s (
 token **1,75 s / 5,21 s / 10,52 s**.
 
 Nota: desde el 12-11 la producción es **IQ3_S** (ver la sección anterior). Las medidas de
-las secciones de series corresponden a **IQ3_XXS**; la única excepción son las dos corridas
+las secciones de series corresponden a **IQ3_XXS**; la única excepción son las dos ejecuciones
 del 12-11, sobre IQ3_S con contexto 94.000. La medida informal de IQ3_S del 26-10
 (~+17 % en 16K con la config de entonces) quedó desfasada: ver [PASOS.md](PASOS.md).
 

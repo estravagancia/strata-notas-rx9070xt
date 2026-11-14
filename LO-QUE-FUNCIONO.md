@@ -22,8 +22,8 @@ estándar cubre 106.299 entradas; recortamos a **50.847 ids** frecuentes en espa
 (medio corpus real de chats, ver [data/README.md](data/README.md)) y el motor lo acepta
 sustituyendo `Strata-data/mtp/rt/draft_vocab.bin`.
 
-**Cuánto (1 corrida limpia, 26-10):** chat **+0,8 %**, borradores aceptados **+2,8
-puntos porcentuales**, y **−93 MiB** de VRAM del cabezal. Una segunda corrida se
+**Cuánto (1 ejecución limpia, 26-10):** chat **+0,8 %**, borradores aceptados **+2,8
+puntos porcentuales**, y **−93 MiB** de VRAM del cabezal. Una segunda ejecución se
 contaminó y no cuenta: señal positiva pero de una sola muestra.
 
 **Formato** (por si quieres generar el tuyo en tu idioma): el fichero es un array
@@ -44,7 +44,7 @@ Cambiados a mano y en conjunto (no es un A/B de uno a uno):
 ## 4. El protocolo de medida en frío
 
 No es un flag, pero fue lo que desmontó la mayoría de las falsas mejoras (±3 % de ruido
-entre corridas "en caliente"). Sin él, habríamos adoptado cuatro cosas que no mejoraban
+entre ejecuciones "en caliente"). Sin él, habríamos adoptado cuatro cosas que no mejoraban
 nada. Ver [scripts/run-bench.sh](scripts/run-bench.sh).
 
 ## 5. Endurecimiento del servidor (19-10)
@@ -85,7 +85,7 @@ lineales) tiene desde el 0.1.55 un kernel nuevo para gfx12 que usa los tensor co
 (WMMA). Se activa por variable de entorno; el umbral bajó a 64 tokens, así que también
 mejoran prompts medianos.
 
-**Cuánto (A/B en frío, 31-10, dos corridas por brazo, IQ3_XXS, contexto 131.072):**
+**Cuánto (A/B en frío, 31-10, dos ejecuciones por brazo, IQ3_XXS, contexto 131.072):**
 
 | Métrica | GDN off | GDN on | Diferencia |
 |---|---|---|---|
@@ -257,7 +257,7 @@ protocolo propio.
 - La restauración es de la **conversación aparcada**, no de un prompt cualquiera: si el
   prompt no coincide con lo espejado, no hay nada que reutilizar.
 - No probado sobre motores 0.1.58/0.1.59 (que aquí se rechazaron por otro motivo). En 32K
-  la pareja del A/B no usó `--long`; la única corrida posterior con `--long` sobre esta
+  la pareja del A/B no usó `--long`; la única ejecución posterior con `--long` sobre esta
   config (13-11, en frío) dio 3.161 tok/s — cota baja, porque el motor le bajó el chunk de
   prompt por falta de RAM libre — y el CacheKV no mostró regresión a esa longitud (ver
   [RESULTADOS.md](RESULTADOS.md)).

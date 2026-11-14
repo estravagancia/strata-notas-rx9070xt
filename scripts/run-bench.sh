@@ -4,8 +4,8 @@
 # Lo lanzas TÚ desde tu consola, con OpenCode parado y el servidor de producción parado:
 #   bench/run-bench.sh LABEL [--det] [--extra "args engine..."] [--config archivo.json]
 #
-# Crea bench/runs/<YYYY-MM-DD-HHMM>-<LABEL>/ con SOLO los datos de esta corrida:
-#   server.log         log del motor de esta corrida (el log de producción no se toca)
+# Crea bench/runs/<YYYY-MM-DD-HHMM>-<LABEL>/ con SOLO los datos de esta ejecución:
+#   server.log         log del motor de esta ejecución (el log de producción no se toca)
 #   serve-stdout.log   salida del serve
 #   strata-bench.json  config exacta usada (copia con "log" y args ajustados)
 #   meta.txt           procedencia: engine + BUILD.json, sha256 de configs, args reales, tabla tuning
@@ -136,7 +136,7 @@ sleep 20   # margen para el primer warm-up del engine
 
 RC=0
 for n in 1 2; do
-  echo "== bench corrida $n / 2 =="
+  echo "== bench ejecución $n / 2 =="
   $PY tools/strata_bench.py --url "$URL" $BENCH_EXTRA --out "$RUNDIR/run$n" > "$RUNDIR/bench-run$n.log" 2>&1
   RC=$?
   tail -n 15 "$RUNDIR/bench-run$n.log"

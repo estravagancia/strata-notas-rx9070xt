@@ -51,11 +51,11 @@ Con los benches "en caliente" (con otros programas usando el PC) las diferencias
 eran puro ruido. A partir de aquí toda decisión usa un protocolo fijo:
 
 - Servidor de producción y todo lo demás **parados**; el script `scripts/run-bench.sh`
-  (saneado) arranca el motor con la config de producción y lanza 2 corridas completas:
+  (saneado) arranca el motor con la config de producción y lanza 2 ejecuciones completas:
   la primera es calentamiento, **la segunda es la válida**.
-- Cada corrida guarda su propio `server.log`: si se coló algo ajeno, se detecta y se repite.
+- Cada ejecución guarda su propio `server.log`: si se coló algo ajeno, se detecta y se repite.
 - Los A/B cambian **una sola variable** (un flag o un valor) y se comparan contra una
-  corrida "ancla" del mismo día.
+  ejecución "ancla" del mismo día.
 
 En RESULTADOS.md están las tablas; los resultados de cada experimento, en
 LO-QUE-FUNCIONO / LO-QUE-NO.
@@ -100,7 +100,7 @@ El paquete oficial de v0.2.7 (motor 0.1.52) traía cuatro interruptores nuevos d
 decodificación y un reparto distinto de la ventana PCIe. Tal cual: **chat −8,8 %**
 (91,7 → 71,5 tok/s en el primer prompt). La caza de culpables mostró que **ninguno
 individual** lo explica — el daño aparece con los cuatro activos — y que apagando
-`STRATA_EXPDEC` se recupera **+2,1 %** sobre el control (6 de 6 corridas positivas).
+`STRATA_EXPDEC` se recupera **+2,1 %** sobre el control (6 de 6 ejecuciones positivas).
 Se adoptó el 0.1.52 con `STRATA_EXPDEC=0` y `STRATA_PLE_AUTO_RAM=0`.
 
 ## 29-10 — Un experimento que salió mal y su rollback
@@ -167,7 +167,7 @@ token**. Muestras: `benches/muestras/engine-0.1.57-ring0` y `engine-0.1.57-anill
 Dos cosas el mismo día. Primero cerramos el A/B de modelo (IQ3_S frente a IQ3_XXS):
 **chat −5,5 % y agente −5,3 %** a cambio de **+3,2 pp** de tokens conocidos, con el techo
 de pérdida fijado en −20 % de antemano → **IQ3_S pasa a producción** (contexto 94.000,
-sin visión; IQ3_XXS queda como alternativa para contexto largo). Sus dos primeras corridas
+sin visión; IQ3_XXS queda como alternativa para contexto largo). Sus dos primeras ejecuciones
 auditadas son las primeras sobre IQ3_S: `benches/muestras/cachekv-0.1.57-ctrl-iq3s` y
 `cachekv-0.1.57.90-iq3s`.
 
@@ -212,16 +212,16 @@ Al día siguiente lo probamos usándolo de verdad, y quedó la frontera entre ca
 ## 13-11 (tarde) — Cerramos el 32K pendiente (banco en frío, `--long`)
 
 Quedaba pendiente la relectura de 32.000 tokens en la config actual: la pareja del 12-11
-no usó `--long`. Corrimos una corrida suelta en frío con la misma config de producción
+no usó `--long`. Lanzamos una ejecución suelta en frío con la misma config de producción
 (puerto de banco aparte, la producción intacta): **3.161 tok/s y 10,17 s hasta el primer
 token** en la mediana, ~3,4 % por encima del 3.055,5 de la era IQ3_XXS. Muestra en
 `benches/muestras/long-0.1.57.90-iq3s/`.
 
-El matiz, que casi nos pasa desapercibido: en esa corrida quedaban ~8,8 GiB libres de RAM
+El matiz, que casi nos pasa desapercibido: en esa ejecución quedaban ~8,8 GiB libres de RAM
 al arrancar (en la del 12-11, ~9,8), y el motor adaptó solo el chunk de prompt de 16.384
 a 8.192. En ese mismo run el 16K dio 3.220 tok/s, un 6,7 % por debajo del valor publicado.
 O sea: el 32K es cota baja, y **la RAM libre al arranque es una variable de la medición**,
-no solo del servicio. Antes de comparar dos corridas grandes, hay que mirar el
+no solo del servicio. Antes de comparar dos ejecuciones grandes, hay que mirar el
 `server.log` de cada una.
 
 Queda abierta una consecuencia incómoda: el 14-11 por la mañana la producción llevaba ~13

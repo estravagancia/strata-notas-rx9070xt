@@ -64,4 +64,4 @@ Brazo de la pareja del 12-11 sobre **IQ3_S, contexto 94.000, sin visión**: moto
 esperado: la `.90` solo consta en el `BUILD.json` del componente. Su control es
 `../cachekv-0.1.57-ctrl-iq3s/`. La ganancia del parche no está en estas tablas (son
 planas, y así se documenta): se mide con reinicio, en `../../scripts/kv-persist-test.sh`.
-Corrida `run2` auditada; `run1` fue el calentamiento y se descartó.
+Ejecución `run2` auditada; `run1` fue el calentamiento y se descartó.

@@ -16,26 +16,26 @@ La producción de esta caja es hoy **Qwen3.8-Flash-Next en IQ3_S** (83,6 GB en d
 [configs/](configs/). Los números siguientes están medidos en **IQ3_S** con el motor
 **0.1.57.90** (la etiqueta v0.2.11 + un parche de un fork ajeno, ver
 [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §10), 16 GiB de VRAM y ~60 GB de RAM, sobre un
-runtime **ROCm 10.3 propio** (ver más abajo). Es la corrida auditada `run2` del brazo de
+runtime **ROCm 10.3 propio** (ver más abajo). Es la ejecución auditada `run2` del brazo de
 producción del 12-11 (`benches/muestras/cachekv-0.1.57.90-iq3s/`, con su control
 0.1.57 oficial al lado); las de **IQ3_XXS** (contexto 131.072, del 05-11) siguen en
 [RESULTADOS.md](RESULTADOS.md):
 
 | Métrica | Valor |
 |---|---|
-| Escritura tipo chat (dominio común) | **~88 tokens/s** de media de la corrida (mediana 79,0; rango 74,6-110,1) |
+| Escritura tipo chat (dominio común) | **~88 tokens/s** de media de la ejecución (mediana 79,0; rango 74,6-110,1) |
 | Relectura de un texto de 4.000 tokens | **~2.440 tokens/s** (empieza a responder en ~1,67 s) |
 | Relectura de 16.000 tokens | **~3.460 tokens/s** (primer token en ~4,67 s) |
 | Relectura de 32.000 tokens | **~3.160 tokens/s** (primer token en ~10,2 s; medido el 13-11, cota baja, ver [RESULTADOS.md](RESULTADOS.md)) |
 | Contexto máximo | 94.000 tokens en IQ3_S (131.072 con IQ3_XXS) |
 | Reinicio con la conversación abierta | prefill **−92,7 %** (el KV se restaura del disco) |
 
-Sobre esas cifras: el chat es la media y la mediana de la misma corrida auditada; en el uso
+Sobre esas cifras: el chat es la media y la mediana de la misma ejecución auditada; en el uso
 diario con borradores aceptados se cae en la parte alta del rango (ese ~94 tokens/s que
 pubblicamos antes era una estimación típica del uso, no una medida). La fila de 32K no
-viene de la pareja del 12-11 (esa no usó `--long`): la midió el 13-11 una corrida de
+viene de la pareja del 12-11 (esa no usó `--long`): la midió el 13-11 una ejecución de
 banco de pruebas en frío con `--long`, con la misma config de producción y la producción
-intacta (puerto aparte). En esa corrida quedaban ~8,8 GiB libres de RAM al arrancar, y el
+intacta (puerto aparte). En esa ejecución quedaban ~8,8 GiB libres de RAM al arrancar, y el
 motor bajó solo el tamaño de chunk de prompt de 16.384 a 8.192; por eso su 16K salió ~7 %
 por debajo del de la tabla y el 32K hay que leerlo como **cota baja**. La muestra auditada
 está en [benches/muestras/long-0.1.57.90-iq3s/](benches/muestras/long-0.1.57.90-iq3s/).

@@ -16,12 +16,12 @@ cuantizados no mueve el total — y el overhead de la bandera sí.
 
 Arriba (upstream) lo midieron en Zen 4: 3-5 % más LENTO. Hipótesis local: Zen 5 (9800X3D)
 tiene gather por hardware y se invertirá. Medido (A/B mismo día `-iq3-0150` vs
-`-iqgather`): **−1,5 % / −1,4 %** en dos corridas. No se invierte. Segundo flag de CPU
+`-iqgather`): **−1,5 % / −1,4 %** en dos ejecuciones. No se invierte. Segundo flag de CPU
 que se estrella contra el mismo muro.
 
 ## Subir el contexto (131k o 163k) → chat −4 % para +1 % de prefill
 
-Corridas del 23-10 contra la ancla del día (98.304):
+Ejecuciones del 23-10 contra la ancla del día (98.304):
 
 | Contexto | 4K | 16K | chat |
 |---|---|---|---|
@@ -48,7 +48,7 @@ wheels 7.10.0a20251120 + su tabla 100200. Buscar lo nuevo no pagó aquí.
 
 ## Caché de expertos "por capa" (`--expert-cache-per-layer`) → ruido
 
-+0,8/+0,1/+1,2 % (4K/16K/chat), dentro de la varianza entre corridas. No adoptado.
++0,8/+0,1/+1,2 % (4K/16K/chat), dentro de la varianza entre ejecuciones. No adoptado.
 
 ## `--spec-min-p 0.75` → neutro
 
@@ -94,7 +94,7 @@ para gfx12 y un reparto distinto de la ventana PCIe. Con los defaults tal cual: 
 cuatro de uno en uno: **cada uno recupera el prompt 0** (ningún culpable único; el daño
 necesita los cuatro activos). Con `STRATA_DEFAULTS=026` (los defaults viejos) queda
 neutro (+0,2 %). La solución que se adoptó fue más fina: **solo `STRATA_EXPDEC=0`** da
-+2,1 % sobre el control (6 de 6 corridas), y los otros tres se quedaron como vinieron.
++2,1 % sobre el control (6 de 6 ejecuciones), y los otros tres se quedaron como vinieron.
 Lección: un default de upstream no está medido en tu tarjeta; apágalo si tu A/B lo pide.
 
 ## Contexto 262.144 + `--pcie-frac 0` + `--adapt-every 0` → **chat −28 %**
@@ -110,7 +110,7 @@ día. Si alguien quiere contexto 262k, que suba primero el contexto solo y mida;
 
 ## `--spec-min-p 0.70` sobre el motor 0.1.54 → neutro (y por qué se queda 0,50)
 
-A/B del 30-10 con dos corridas por brazo: chat **−0,1 % / +2,4 %** (gate ≥ +1,5 % en las
+A/B del 30-10 con dos ejecuciones por brazo: chat **−0,1 % / +2,4 %** (gate ≥ +1,5 % en las
 dos, no cumplido). Un detalle bonito: los borradores aceptados suben **+11 puntos**
 (61-63 % → 72,6-74,3 %) pero el rendimiento no, porque aceptar más tarde no compra
 tokens extra. El primer token mejora un pelo en 4K/16K (≈50-70 ms). Se queda 0,50.
