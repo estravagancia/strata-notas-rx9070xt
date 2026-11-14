@@ -67,11 +67,23 @@ El lector de imágenes en GPU (`strata-vision-hip`) es rápido (1,06 s por image
 16 GiB justos, mejor lector en CPU (el valor por defecto de Strata para tarjetas de
 menos de ~23 GB). Coincide con lo que recomienda upstream.
 
-## Borradores "dflash2" → ni lo intentamos
+## Borradores "dflash2" → descartado de oídas, adoptado al medirlo
 
-Upstream ya lo midió en familias RDNA 4: *"gfx1201 (R9700): slower on every prompt"*.
-Confiamos en esa medida; no la replicamos (lo decimos para que no cuenten esto como
-medida nuestra).
+Esta es la historia de un negativo que resultó falso, y por eso va aquí y no en
+[LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §8.
+
+- **Antes del 03-11** no lo intentamos: upstream lo había medido en familias RDNA 4 y
+  lo reportaba *"gfx1201 (R9700): slower on every prompt"*. Confiamos en esa medida y la
+  apuntamos como descartada, sin replicarla.
+- **El 03-11 sí lo medimos**, con el motor 0.1.56 y A/B en frío del mismo día contra el
+  cabezal MTP (IQ3_XXS, contexto 131.072): chat **+5,5 % en la mediana** (81,2 vs 77,0),
+  4K y 16K planos. **Se adoptó** y es hoy la config de producción (`--draft dflash2`,
+  `--draft-fallback none`, `--draft-conf 0.7`).
+
+Moraleja, la misma del aviso del final de este fichero: la cifra ajena que nos hizo
+descartarlo no era de esta caja. Aquí sigue habiendo un coste real —el rango del borrador
+es mucho más ancho (69,4-126,2 frente a 71,2-97,7 del control)—, pero el balance salió a
+favor. Si algún día quieres volver atrás, el rollback es quitar el `--draft` de la config.
 
 
 ## Los defaults nuevos de gfx12 del motor 0.1.52 → **chat −8,8 %**

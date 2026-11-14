@@ -60,13 +60,16 @@ eran puro ruido. A partir de aquí toda decisión usa un protocolo fijo:
 En RESULTADOS.md están las tablas; los resultados de cada experimento, en
 LO-QUE-FUNCIONO / LO-QUE-NO.
 
-## 24-10 — Popcount (Zen 5) y motor 0.1.48.1
+## 24-10 — Popcount (Zen 5) y motor 0.1.49
 
 Port de un atajo de decodificación cuantizada que arriba solo usaba con DeepSeek:
 `_mm256_popcnt_epi32` aplicado a los expertos nativos IQ3. En micro-medidas puras era
 **15-30 % más rápido**… y en el servidor completo salió **−1,5 %**. Moraleja: un kernel
 más rápido no gana cuando el cuello es el PCIe. La bandera (`STRATA_IQ_POPCOUNT`) se
-quedó apagada. Motor 0.1.48.1 compilado desde v0.2.4.
+quedó apagada. Motor 0.1.49 compilado desde v0.2.4 (el `0.1.48.1` de las notas
+anteriores era en realidad la versión del *Control* de esa release, no la del motor:
+`CMakeLists.txt` de v0.2.4 declara `VERSION 0.1.49` y el `results.json` de la muestra
+`-iqpc0` reporta `engine_version: 0.1.49`).
 
 ## 25-10 — Pasamos al motor **oficial** 0.1.50
 

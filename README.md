@@ -72,7 +72,7 @@ larga y más útil, de cosas que se midieron y **no** mejoraron nada.
    parche CacheKV de un fork ajeno tal como lo aplicamos (sí en producción).
 6. [configs/](configs/) y [scripts/](scripts/) — la configuración real y los scripts de
    medidas (bench en frío, y el test con reinicio que necesita el KV en disco).
-7. [benches/muestras/](benches/muestras/) — 11 mediciones completas para que audites las tablas.
+7. [benches/muestras/](benches/muestras/) — 12 mediciones completas para que audites las tablas.
 8. [CREDITOS.md](CREDITOS.md) — de dónde viene cada pieza.
 
 ## Estado actual (12-11-2026)

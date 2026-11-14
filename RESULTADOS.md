@@ -23,8 +23,8 @@
 | Corrida (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
 |---|---|---|---|---|---|
 | `-anclaje98` (23-10) | 0.1.48 | 74,6 | 1.957,7 | 2.409,4 | referencia del protocolo |
-| `-iqpc0` (24-10) | 0.1.48.1 | **78,1** | 1.924,1 | 2.375,1 | control A/A del día del popcount |
-| `-iqpc1` (24-10) | 0.1.48.1 | 76,9 | 1.926,2 | 2.384,3 | + `STRATA_IQ_POPCOUNT=1` → descartado |
+| `-iqpc0` (24-10) | 0.1.49 | **78,1** | 1.924,1 | 2.375,1 | control A/A del día del popcount |
+| `-iqpc1` (24-10) | 0.1.49 | 76,9 | 1.926,2 | 2.384,3 | + `STRATA_IQ_POPCOUNT=1` → descartado |
 | `-iq3-0150` (25-10) | **0.1.50** | 77,8 | **1.949,3** | **2.385,5** | motor oficial → **neutral, adoptado** |
 | `-iqgather` (25-10) | 0.1.50 | 76,7 | 1.949,9 | 2.385,5 | + `STRATA_IQ_GATHER=1` → descartado |
 
@@ -37,7 +37,7 @@ Lecturas honestas:
   posterior al `-anclaje98`. Ese ancla solo sirve dentro de su propio día.
 - Los dos A/B limpios (mismo día, misma config, una sola variable) son
   `-iqpc0` vs `-iqpc1` (24-10) y `-iq3-0150` vs `-iqgather` (25-10).
-- 0.1.48.1 → 0.1.50 (comparando los controles de cada día, con la reserva de "días
+- 0.1.49 → 0.1.50 (comparando los controles de cada día, con la reserva de "días
   distintos"): chat −0,3 %, 4K +1,3 %, 16K +0,4 % → **neutral**, y por eso el motor
   oficial se quedó.
 - Las muestras completas de `-iqpc0`, `-iq3-0150` e `-iqgather` están en

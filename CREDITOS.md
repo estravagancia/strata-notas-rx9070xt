@@ -5,7 +5,7 @@
   y parches propios; lo que hay dentro de los parches (contexto de código) es de Strata.
 - **Versiones usadas**: clon en el lanzamiento v0.1.45; compilaciones propias desde las
   etiquetas v0.2.2 (motor 0.1.46), v0.2.3 (`5c8dd322`, motor 0.1.48), v0.2.4 (`96ca4383`,
-  motor 0.1.48.1); después, **paquetes oficiales** sin compilar: 0.1.50 (v0.2.5),
+  motor 0.1.49); después, **paquetes oficiales** sin compilar: 0.1.50 (v0.2.5),
   0.1.52 (v0.2.7), 0.1.54 (v0.2.8), 0.1.55 (v0.2.9) y, desde el 03-11/05-11, **0.1.56 y
   0.1.57**, todos
   `linux-x86_64-hip-rx9070` con sha256 verificado contra el `SHA256SUMS.txt` de su release

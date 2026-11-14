@@ -8,7 +8,7 @@ expertos, `pcie_frac`, cachés…). Las dos últimas son las **primeras sobre IQ
 
 | Carpeta | Etiqueta interna | Motor / qué probaba |
 |---|---|---|
-| `iqpc0-control-0.1.48.1/` | `-iqpc0` (24-10) | 0.1.48.1 sin banderas (control) |
+| `iqpc0-control-0.1.49/` | `-iqpc0` (24-10) | 0.1.49 sin banderas (control) |
 | `iq3-0150-engine-0.1.50/` | `-iq3-0150` (25-10) | 0.1.50 oficial (control; motor adoptado entonces) |
 | `iqgather-0.1.50-flag/` | `-iqgather` (25-10) | 0.1.50 + `STRATA_IQ_GATHER=1` (descartado) |
 | `off-0.1.55-control/` | `-0155-off-b` (31-10) | 0.1.55 + ROCm 10.3, GDN **apagado** (control del A/B) |
