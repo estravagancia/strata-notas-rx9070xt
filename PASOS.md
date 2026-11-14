@@ -206,6 +206,26 @@ Al día siguiente lo probamos usándolo de verdad, y quedó la frontera entre ca
   log: se ven entradas aparcadas y restauradas por debajo. Lo registramos como matiz,
   sin afirmar el mecanismo.
 
+## 13-11 (tarde) — Cerramos el 32K pendiente (banco en frío, `--long`)
+
+Quedaba pendiente la relectura de 32.000 tokens en la config actual: la pareja del 12-11
+no usó `--long`. Corrimos una corrida suelta en frío con la misma config de producción
+(puerto de banco aparte, la producción intacta): **3.161 tok/s y 10,17 s hasta el primer
+token** en la mediana, ~3,4 % por encima del 3.055,5 de la era IQ3_XXS. Muestra en
+`benches/muestras/long-0.1.57.90-iq3s/`.
+
+El matiz, que casi nos pasa desapercibido: en esa corrida quedaban ~8,8 GiB libres de RAM
+al arrancar (en la del 12-11, ~9,8), y el motor adaptó solo el chunk de prompt de 16.384
+a 8.192. En ese mismo run el 16K dio 3.220 tok/s, un 6,7 % por debajo del valor publicado.
+O sea: el 32K es cota baja, y **la RAM libre al arranque es una variable de la medición**,
+no solo del servicio. Antes de comparar dos corridas grandes, hay que mirar el
+`server.log` de cada una.
+
+Queda abierta una consecuencia incómoda: el 14-11 por la mañana la producción llevaba ~13
+min levantada con 3,3 GiB disponibles, y lo esperable es que el motor también le hubiera
+bajado el chunk al arrancar. No podemos confirmarlo (el endpoint no expone ese estado), así
+que lo dejamos registrado como sospecha. Detalle en [RESULTADOS.md](RESULTADOS.md).
+
 ## Lección de fondo (octubre y principios de noviembre)
 
 **Casi todo lo que prometía era ruido, y lo que funcionó son nueve cosas concretas y

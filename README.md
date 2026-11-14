@@ -26,14 +26,21 @@ producción del 12-11 (`benches/muestras/cachekv-0.1.57.90-iq3s/`, con su contro
 | Escritura tipo chat (dominio común) | **~88 tokens/s** de media de la corrida (mediana 79,0; rango 74,6-110,1) |
 | Relectura de un texto de 4.000 tokens | **~2.440 tokens/s** (empieza a responder en ~1,67 s) |
 | Relectura de 16.000 tokens | **~3.460 tokens/s** (primer token en ~4,67 s) |
-| Relectura de 32.000 tokens | no medido en IQ3_S (la corrida del 12-11 no usó `--long`) |
+| Relectura de 32.000 tokens | **~3.160 tokens/s** (primer token en ~10,2 s; medido el 13-11, cota baja, ver [RESULTADOS.md](RESULTADOS.md)) |
 | Contexto máximo | 94.000 tokens en IQ3_S (131.072 con IQ3_XXS) |
 | Reinicio con la conversación abierta | prefill **−92,7 %** (el KV se restaura del disco) |
 
 Sobre esas cifras: el chat es la media y la mediana de la misma corrida auditada; en el uso
 diario con borradores aceptados se cae en la parte alta del rango (ese ~94 tokens/s que
-pubblicamos antes era una estimación típica del uso, no una medida). Las medidas del 12-11
-no incluyen 32K. Los porcentajes de DFlash2 (+12 %/+13 %) y del anillo (+11 %/+14 %) son
+pubblicamos antes era una estimación típica del uso, no una medida). La fila de 32K no
+viene de la pareja del 12-11 (esa no usó `--long`): la midió el 13-11 una corrida de
+banco de pruebas en frío con `--long`, con la misma config de producción y la producción
+intacta (puerto aparte). En esa corrida quedaban ~8,8 GiB libres de RAM al arrancar, y el
+motor bajó solo el tamaño de chunk de prompt de 16.384 a 8.192; por eso su 16K salió ~7 %
+por debajo del de la tabla y el 32K hay que leerlo como **cota baja**. La muestra auditada
+está en [benches/muestras/long-0.1.57.90-iq3s/](benches/muestras/long-0.1.57.90-iq3s/).
+Como referencia histórica: la config anterior con IQ3_XXS y anillo profundo (05-11) daba
+~3.055 tokens/s en 32K. Los porcentajes de DFlash2 (+12 %/+13 %) y del anillo (+11 %/+14 %) son
 estimaciones previas al A/B; las ganancias auditadas de esos A/B son **+5,5 % de chat
 (mediana)** y **+10,7 % en 4K**, con sus tablas en [RESULTADOS.md](RESULTADOS.md).
 

@@ -256,7 +256,10 @@ protocolo propio.
   `--conversation-cache-disk-mib 30720`).
 - La restauración es de la **conversación aparcada**, no de un prompt cualquiera: si el
   prompt no coincide con lo espejado, no hay nada que reutilizar.
-- No probado sobre motores 0.1.58/0.1.59 (que aquí se rechazaron por otro motivo), ni en
-  32K (la pareja del A/B no usó `--long`).
+- No probado sobre motores 0.1.58/0.1.59 (que aquí se rechazaron por otro motivo). En 32K
+  la pareja del A/B no usó `--long`; la única corrida posterior con `--long` sobre esta
+  config (13-11, en frío) dio 3.161 tok/s — cota baja, porque el motor le bajó el chunk de
+  prompt por falta de RAM libre — y el CacheKV no mostró regresión a esa longitud (ver
+  [RESULTADOS.md](RESULTADOS.md)).
 - El rollback: quitar las dos flags y volver al componente `0.1.57` (nuestro backup de la
   config es `strata-iq3_s.json.pre-cachekv-20261112.bak`).

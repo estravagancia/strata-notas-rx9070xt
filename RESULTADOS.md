@@ -140,10 +140,33 @@ prefill tras reinicio, no el tok/s):
 | chat tok/s (media de los 9) | 86,6 | 88,2 |
 | prefill 4K tok/s · primer token | 2.441,8 · 1,67 s | 2.437,8 · 1,67 s |
 | prefill 16K tok/s · primer token | 3.457,1 · 4,67 s | 3.461,1 · 4,67 s |
+| prefill 32K tok/s · primer token † | — | 3.161,1 · 10,17 s |
 | agente tok/s (mediana, 15 turnos) | 86,8 | 88,0 |
 | agente acierto de caché | 69,78 % | 69,74 % |
 
-No medido en esta config: 32K (la pareja no usó `--long`). Con las dos flags del CacheKV
+† El 32K no lo midió la pareja del 12-11 (no usó `--long`). Lo midió el 13-11 una corrida
+de banco en frío con `--long`, con la misma config de producción y la producción intacta
+en otro puerto
+([benches/muestras/long-0.1.57.90-iq3s/](benches/muestras/long-0.1.57.90-iq3s/): media
+3.163,4, rango 3.156,7-3.172,5). Ojo con la comparación: en esa corrida quedaban ~8,8 GiB
+libres de RAM al arrancar (en la del 12-11, ~9,8) y el motor bajó solo el tamaño de chunk
+de prompt de 16.384 a 8.192; en ese mismo run el 16K dio 3.220 tok/s, un 6,7 % por debajo
+del valor de la tabla. El 32K hay que leerlo como **cota baja** en esas condiciones de
+memoria. Aun así supera en ~3,4 % al 3.055,5 de la config anterior con IQ3_XXS y anillo
+profundo (05-11). El resto de métricas de esa corrida cuadra con la tabla: chat 88,4 de
+media y 80,3 en la mediana, acierto del agente 69,74 %; la decodificación por turno del
+agente salió más baja (79,6 de mediana frente a 88,0), pero es la métrica más ruidosa de
+todas (depende de cuántos borradores acepta el drafter en cada turno) y no la usamos para
+nada.
+
+Y la consecuencia práctica, comprobada el 14-11 a las 09:35: la producción se había
+relanzado a las 09:22 y llevaba ~13 min con **3,3 GiB disponibles** y 53 GB de RSS. Con tan poca RAM libre al arrancar,
+lo esperable es que el motor también le haya bajado el chunk de prompt. El endpoint no
+expone ese estado (solo `/health` y `/v1/models`), así que lo dejamos como sospecha sin
+afirmar: para confirmarlo habría que relanzar la producción con más RAM libre o mirar el
+log de esa sesión.
+
+Con las dos flags del CacheKV
 activas, el primer request tras un arranque en frío deja de pagar el prefill de la
 conversación: `41612 reused + 36 read en 894 ms` frente a los ~9 s de prefill frío de un
 prompt equivalente (medido con reinicio, no con `strata_bench.py`).
