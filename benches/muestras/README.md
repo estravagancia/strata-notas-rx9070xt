@@ -3,8 +3,9 @@
 Doce corridas auditadas, en el formato `results.json` "schema 1" de
 `tools/strata_bench.py`: cada una contiene 3 pasadas por métrica, la máquina
 (GPU/CPU/RAM/OS), la versión del motor y los detalles del arranque (ranuras de
-expertos, `pcie_frac`, cachés…). Las dos últimas son las **primeras sobre IQ3_S**
-(contexto 94.000); las siete anteriores son IQ3_XXS.
+expertos, `pcie_frac`, cachés…). Las tres últimas son las **primeras sobre IQ3_S**
+(contexto 94.000, sin visión); las nueve anteriores son IQ3_XXS y todas corrieron
+con visión en GPU (`images: true`), un factor más al comparar entre series.
 
 | Carpeta | Etiqueta interna | Motor / qué probaba |
 |---|---|---|
@@ -33,8 +34,8 @@ planas a propósito: lo que
 aporta ese parche no se ve en un bench continuo, se ve tras un reinicio (ver
 `scripts/kv-persist-test.sh`).
 
-Qué mirar si quieres repetir el experimento: `machine.engine_version`, `context` y
-`expert_slots` (deben coincidir con la corrida que quieras comparar), y el bloque de
-resultados por métrica. El `README.md` de cada carpeta es el resumen que generamos en
+Qué mirar si quieres repetir el experimento: `machine.engine_version`, `context`,
+`expert_slots` y `machine.engine_info.images` (deben coincidir con la corrida que
+quieras comparar), y el bloque de resultados por métrica. El `README.md` de cada carpeta es el resumen que generamos en
 su momento; el detalle del protocolo (run1 descartada, auditoría del log) está en la
 raíz del repo.

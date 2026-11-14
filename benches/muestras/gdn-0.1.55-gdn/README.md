@@ -49,7 +49,7 @@ Cache hit over the follow-up turns: 70.0 % (69.9-70.0); earlier-turn tokens read
 | 4 | 10584 | 8579 | 2005 | 1440.1 | 1.414 | 80.1 |
 | 5 | 13300 | 10617 | 2683 | 1724.2 | 1.579 | 72.9 |
 
-Per-request data: `results.json`. Engine log lines from the start: `engine-log-excerpt.txt` (when this run started the server).
+Per-request data: `results.json`.
 
 ## Correctness and limitations
 

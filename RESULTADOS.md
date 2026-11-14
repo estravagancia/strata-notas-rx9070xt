@@ -17,6 +17,12 @@
   98.304 a 131.072 y el 27-10 cambió la reserva de VRAM; el 30-10 pasamos a un runtime
   ROCm propio. Comparar entre bloques arrastra esos cambios; dentro de un bloque los
   A/B cambian una sola variable.
+- **Visión**: todas las muestras de la serie IQ3_XXS corrieron con visión en GPU
+  (`images: true` en su `results.json`) y las de IQ3_S, sin visión (`images: false`).
+  La visión en GPU ocupa ~1 GiB de VRAM estable que se resta de la cache de expertos
+  (ver [LO-QUE-NO-FUNCIONO.md](LO-QUE-NO-FUNCIONO.md) §"Visión (imágenes) en la GPU").
+  Dentro de una misma serie el flag es idéntico en todos los brazos y los A/B valen;
+  entre series es un factor más de diferencia junto a la cuantización.
 
 ## Serie 23-10 → 25-10 (IQ3_XXS, contexto 98.304, wheels 7.10)
 
