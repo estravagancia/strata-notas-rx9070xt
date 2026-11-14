@@ -171,6 +171,12 @@ Para quien no conozca la unidad: un token es aproximadamente media palabra en es
 | Releer un texto de 16.000 tokens | ~2.430 tokens/s | **~3.100 tokens/s** |
 | Releer un texto de 32.000 tokens | — (no se medía) | **~3.055 tokens/s** (responde en ~10 s) |
 | Memoria de conversación | 98.000 tokens | **131.000 tokens** (un libro entero) |
+| Recuperar del disco una conversación larga | — (no existía) | **81.166 tokens en 629 ms** † |
+
+† Capacidad añadida tras esa baseline, con el parche CacheKV; no estaba en la caja del 5 de noviembre.
+El récord absoluto de restauración desde disco (13 de noviembre, uso real, no un banco de pruebas).
+La restauración más rápida por debajo de tres décimas fue de 77.944 tokens en 287 ms. Detalle en la
+sección del 13 de noviembre.
 
 \* La comparación directa de los dos extremos tiene trampa: en medio cambió la configuración
 y el protocolo de medida. Cada escalón intermedio sí está medido contra su inmediato anterior;
