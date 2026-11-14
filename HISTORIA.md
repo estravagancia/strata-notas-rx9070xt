@@ -58,7 +58,7 @@ y se mide que no compensa: se queda la que había. **Cada descarte queda documen
 
 ### 26–27 de octubre · Proteger lo conseguido
 
-Antes de seguir avanzando, se aseguraron las espaldas: un archivo de respaldo de recuperación
+Antes de seguir avanzando, nos cubrimos las espaldas: un archivo de respaldo de recuperación
 tras desastre (configuraciones, parches propios, la serie completa de mediciones) en un disco
 externo; un repositorio de copia de seguridad del trabajo propio; y un repositorio público
 de notas en español, donde está lo que funcionó y lo que no, para quien tenga una tarjeta parecida.
