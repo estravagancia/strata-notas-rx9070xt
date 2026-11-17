@@ -8,6 +8,7 @@ Measured on 2026-11-13 with `tools/strata_bench.py` (suite 1, 3 runs per test, m
 - CPU: AMD Ryzen 7 9800X3D 8-Core Processor (8 cores, 16 threads); installed RAM: 61.4 GiB; storage: not measured
 - OS: Linux 7.0.0-43-generic; GPU driver: not read; CUDA: not read
 - Strata: project 0.1.45, commit 563d0958; engine 0.1.57
+- Engine label note: the folder name says `0.1.57.90` — official engine 0.1.57 **with the CacheKV fork patch applied** (diff in `../../patches/CacheKV-fork-kinoyu-sobre-v0.2.11.patch`); that binary reports `0.1.57` in `--version`, as the line above shows.
 - Background workloads and power limits: not recorded
 
 ## Model and configuration
