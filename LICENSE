@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 <tu nombre o alias de GitHub>
+Copyright (c) 2026 estravagancia
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -14,7 +14,9 @@ copies or substantial portions of the Software.
 
 Portions of the code in patches/ are derived from Strata
 (https://github.com/Niko1221/Strata), MIT License, Copyright (c) 2026 Niko1221
-and the Strata contributors.
+and the Strata contributors. The CacheKV patch in patches/ is derived from
+kinoyu-ai (https://github.com/kinoyu-ai/Strata-CacheKV-kinoyu); the original
+author is kinoyu-ai, not this repository.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,

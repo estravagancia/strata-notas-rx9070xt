@@ -30,6 +30,9 @@ contaminó y no cuenta: señal positiva pero de una sola muestra.
 `int32` **sin cabecera**; el motor calcula cuántas entradas hay dividiendo el tamaño
 entre 4. Nuestro `draft_vocab_es.bin` mide 203.388 bytes = 4 × 50.847.
 
+**Actualizado (16-11):** desde el drafter DFlash2 este vocabulario es también el del drafter,
+y lo sustituimos por uno nuevo generado con criterios modernizados — ver §11.
+
 ## 3. Ajustes de la config final (26-10)
 
 Cambiados a mano y en conjunto (no es un A/B de uno a uno):
@@ -38,8 +41,13 @@ Cambiados a mano y en conjunto (no es un A/B de uno a uno):
 |---|---|
 | `--spec-min-p 0.5` (antes 0.70) | más borradores aceptados en chat; con MTP español no salió el problema de aceptaciones del experimento `--spec-min-p 0.75` |
 | `--vram-reserve-mib 1536` (antes 2940 libres) | liberó VRAM para la cache de expertos: de 3.777 a **4.471 ranuras** |
-| `STRATA_SELECT_WMMA=1` (warp-level matrix multiply en HIP) | el usuario midió **+17 % a 16K** el mismo día (medida rápida, A/B formal pendiente) |
+| `STRATA_SELECT_WMMA=1` (warp-level matrix multiply en HIP) | el usuario midió **+17 % a 16K** el mismo día (cifra informal, nunca replicada en un A/B; sigue en producción como decisión anterior a la evidencia — ver el aviso en [RESULTADOS.md](RESULTADOS.md)) |
 | `--conversation-cache-mib 5376` + `--prompt-cache-tail` | chats largos que siguen donde estaban; parte del salto 74→78 de chat entre series |
+
+Nota de estado (17-11): estos ajustes son los de la era 26-10. `--prompt-cache-tail`
+**no está en las configs actuales** de [configs/](configs/), y las muestras del bench
+registran `tail_role_token: -1`: el efecto atribuido corresponde a aquella config, no a
+la producción de hoy.
 
 ## 4. El protocolo de medida en frío
 
@@ -72,7 +80,8 @@ runtime ROCm instalado aparte y el binario oficial carga ese en su lugar. Sin re
 **Cómo:** runtime autocontenido ("pip install" de los wheels en un venv aparte y copia de
 las librerías), `lib_dirs` en la config del motor y **tabla de hipBLASLt regenerada**
 contra la versión nueva (las tablas son por versión de hipBLASLt). El procedimiento
-exacto está en el script `bench/rocm-runtime-rebuild.sh` del clon local.
+exacto está en el script `bench/rocm-runtime-rebuild.sh` del clon local (script propio,
+no publicado en [scripts/](scripts/)).
 
 **Aviso:** esto no es una configuración soportada por la release. Funciona porque el
 binario resuelve todas las dependencias por `lib_dirs`; si algún día no carga, el
@@ -101,7 +110,9 @@ El contrato de la ruta (`docs/GDN_CONTRACT.md` de v0.2.9) dice que usa **un úni
 de trabajo por dispositivo**: no está pensada para dos prefills simultáneos en la misma
 tarjeta. En nuestro servidor los requests se encolan, así que antes de adoptarla hicimos
 un *soak* de 3 clientes concurrentes (12 requests) y 10 minutos de carga continua
-(872 requests, 0 fallos, primer token mediano 2,0 s). Si algún día se usa `parallel` > 1
+(872 requests, 0 fallos, primer token mediano 2,0 s) — prueba informal en el servidor
+de la caja, sin muestra publicada en `benches/muestras/` y sin protocolo desglosado —.
+Si algún día se usa `parallel` > 1
 a nivel de motor, revisar esto primero.
 
 ## 8. Drafter DFlash2 en lugar del cabezal MTP (motor 0.1.56, `--draft dflash2`)
@@ -111,8 +122,8 @@ modelo DFlash2 con pack propio (`qwen3.8-flash-next-dflash2.q4_0.pack`, ya cuant
 cuartos) en lugar del cabezal MTP entrenado junto al modelo. Config: `--draft dflash2`,
 `--draft-model <pack>`, `--draft-fallback none`, `--draft-conf 0.7`.
 
-**Cuánto (A/B en frío, 03-11, IQ3_XXS, contexto 131.072, medias de 9 requests en chat y
-3 en prefill):**
+**Cuánto (A/B en frío, 03-11, IQ3_XXS, contexto 131.072; los valores son **medianas**
+— de los 9 requests de chat y de las 3 pasadas de prefill —):**
 
 | Métrica | Control MTP | DFlash2 | Diferencia |
 |---|---|---|---|
@@ -121,7 +132,9 @@ cuartos) en lugar del cabezal MTP entrenado junto al modelo. Config: `--draft df
 | 16K tok/s | 3.041,5 | 3.071,4 | plano |
 
 **Lo que hay que saber:** la ganancia es de mediana, no de peor caso: el rango del
-drafter es mucho más ancho (69,4-126,2). En el dominio favorable el techo sube de ~98 a
+drafter es mucho más ancho (69,4-126,2); con las medias de esos mismos 9 requests la
+diferencia sería +13,5 % (82,3→93,4) y a 16K la media daría +1,2 % en lugar de plano —
+publicamos la mediana, el estadístico más conservador—. En el dominio favorable el techo sube de ~98 a
 ~126 tok/s; en el desfavorable puede bajar del control. Aun así se adoptó por el
 balance. Con `--draft-fallback none` no hay vuelta al MTP en caliente: el rollback es
 quitar el `--draft` de la config.
@@ -216,17 +229,21 @@ Qué se sigue de esto, y qué no:
 - **Al reiniciar, el disco persiste y devuelve la conversación en cientos de ms**, con el
   primer request a coste casi normal incluso con el disco por encima del techo y expulsión
   LRU en curso.
-- **Techo medido, no solo declarado**: con el default de 12.288 MiB y sesiones de 60k–85k
+- **Techo medido, no solo declarado**: con el default de 12.288 MiB (≈12 GiB) y sesiones de 60k–85k
   (1,1-1,5 GB por entrada) caben ~8-10 entradas y **las expulsiones LRU ya empezaban en
   ese arranque**. Si trabajas con varias sesiones grandes a la vez y no quieres que se
   desalojen entre ellas, sube el techo: `--conversation-cache-disk-mib 30720`
-  (`df /`: 200 G libres, no urge).
+  (`df /` medido el 17-11: ~195 GB libres, no urge; HARDWARE.md registraba 184 GB a 13-11).
 - **Matiz del umbral, sin afirmar mecanismo**: el motor declara el nivel de disco en el
   arranque como `minimum 60001 tokens; mirrors RAM-eligible conversations at reply
   boundaries`, pero en el mismo log se aparca una entrada de 55.656 tokens y se restaura
   una de 59.944 (etiquetada `(checkpoint)`, por debajo del mínimo declarado). El
   comportamiento exacto de ese umbral no lo aclara el log: no afirmamos por qué una
   sesión de ~55-60k se espeja o no.
+- **Récords de restauración citados en [HISTORIA.md](HISTORIA.md)** (77.944 tokens en
+  287 ms y 81.166 tokens en 629 ms, 13-11): salen de los logs de uso real de la caja,
+  en arranques distintos al de la tabla de arriba; **no hay muestra de bench publicada**
+  de esos dos arranques.
 
 **Cuánto cuesta en lo demás (A/B en frío, 12-11, IQ3_S, contexto 94.000, run2 auditada en
 ambos brazos, en `benches/muestras/cachekv-0.1.57-ctrl-iq3s/` y
@@ -242,12 +259,23 @@ ambos brazos, en `benches/muestras/cachekv-0.1.57-ctrl-iq3s/` y
 | agente acierto de caché % | 69,78 | 69,74 | sin cambio |
 
 Sin las flags el código nuevo no toca nada y con ellas el camino caliente es el mismo: los
-números dicen que el coste es cero y el beneficio solo aparece al reiniciar. Es la primera
+números decían que el coste era cero y el beneficio solo aparece al reiniciar. Es la primera
 vez en esta caja que una mejora no se ve en el bench estándar y hay que medirla con un
 protocolo propio.
 
+**Re-medido el 14-11 con más memoria en el banco** (brazo con disco idéntico a la producción
+contra control sin disco, chunk 16.384 forzado, run2 auditada en los dos): el coste real es
+**~1 % en la media del chat** (88,1 vs 89,1; las medianas 79,5 vs 79,8 quedan dentro del
+ruido) y **1,4–2,9 % en el agente** (18 turnos: media 82,5 vs 83,7; mediana 79,6 vs 82,0). El coste está
+en escribir el espejo al cerrar cada respuesta: 79 escrituras de 120-140 ms en el log del
+brazo con disco. Decisión del 14-11: **se mantiene el disco**, con el coste medido y conocido
+(es una prima de seguro: lo que cubre —el prefill tras el reinicio— no aparece en un bench
+que no reinicia a mitad). Muestras:
+[benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/](benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/)
+y su control sin disco. Tabla completa en [RESULTADOS.md](RESULTADOS.md).
+
 **Lo que hay que saber:**
-- El disco **se autolimita**: `--conversation-cache-disk-mib` (default 12.288 MiB) es un
+- El disco **se autolimita**: `--conversation-cache-disk-mib` (default 12.288 MiB ≈ 12 GiB) es un
   techo duro con autoexpulsión, y `--conversation-cache-disk-min-free-mib` deja siempre
   512 MiB libres. No hace falta ninguna política de limpieza nuestra: tras un día de uso
   real con varias sesiones abiertas ocupaba **10,8 GiB con 10 entradas**, por debajo del
@@ -263,3 +291,36 @@ protocolo propio.
   [RESULTADOS.md](RESULTADOS.md)).
 - El rollback: quitar las dos flags y volver al componente `0.1.57` (nuestro backup de la
   config es `strata-iq3_s.json.pre-cachekv-20261112.bak`).
+
+## 11. Vocabulario de borradores en español moderno para el drafter (16-11)
+
+**Qué:** `data/draft_vocab_es-modern.bin` (188.188 bytes = 4 × 47.047 ids; mismo formato
+que §2) sustituye en la producción al vocabulario de borradores por defecto del drafter.
+Generado a partir de corpus de español moderno; cómo se hizo, en
+[data/README.md](data/README.md).
+
+**Cuánto (16-11, run2 auditada, chunk 16.384, sin disco):** borradores aceptados **+1,7
+puntos** (79,1 % frente a 77,4 % del control anterior), pero chat en media **−1,7 %** y
+agente entre **−5,9 % y −7,2 % según la ventana de turnos** (18 turnos: 78,5 vs 83,7 =
+−6,2 %; agregado n=15 del JSON: −7,2 %). Todos los brazos del 16-11 comparten el vocab
+nuevo y el control es de otro día: **la atribución no es separable** y la duda queda
+declarada. Adoptado (el fichero se instaló el 15-11, con el head nuevo verificado en el
+log; la decisión de mantenerlo se registró el 16-11 — ver [data/README.md](data/README.md)).
+Control vigente de la serie:
+`2026-11-16-1502-ctrl-nuevo-vocab-chunk16384-iq3-s`. Muestra:
+[benches/muestras/vocab-es-nuevo-0.1.57.90-iq3s/](benches/muestras/vocab-es-nuevo-0.1.57.90-iq3s/).
+
+## 12. `STRATA_HC_Q8=0`: un knob de calidad deliberado (mantenido, no una ganancia)
+
+En gfx12 el motor lee por defecto las proyecciones down/up de las hyper-connections
+cuantizadas Q8_0. Aguas arriba eso vale **+7,9…+10,7 % de velocidad de decodificación
+medida en Strix Halo (gfx1151)** (en gfx12 es el valor por defecto, pero upstream no
+publica ahí esa ganancia). Nosotros
+forzamos `=0`: lectura **bf16 exacta**. El coste en esta caja **no está medido** (ningún A/B
+con `=1` en la serie); lo documentado es el coste de upstream. Aguas arriba sí está medida
+la pérdida de calidad del Q8 (KL medio 0,0251, top-1 igual en 95,4 % de las posiciones;
+medida por upstream en una RTX A4000), al
+nivel del ruido de redondeo ordinario del motor: `=0` no arregla una degradación medida, es
+una **preferencia deliberada por la lectura exacta** a cambio de un +8…+10,7 % de prompt que
+aquí no hemos probado. La serie completa de bench lleva `=0` desde la era 0.1.50, así que no
+afecta a la comparabilidad de ninguna tabla de este repo.

@@ -15,10 +15,10 @@ ya es, de por sí, una pequeña hazaña de ingeniería —**pero esa hazaña no 
 El mérito es de [Strata](https://github.com/Niko1221/Strata), un proyecto libre (licencia MIT)
 de Niko1221 y sus colaboradores, cuyo motor consigue que un modelo más grande que la memoria de la
 tarjeta funcione apoyándose en la memoria del sistema. Lo que añade este cuaderno es lo que hubo
-detrás: dos semanas de elegir, configurar y medir con rigor en un PC concreto.
+detrás: un mes de elegir, configurar y medir con rigor en un PC concreto.
 
 Pero "que funcione" no era el listón. El listón era que fuese **rápido, fiable y mejorable**.
-Y eso es lo que ocupa estas dos semanas.
+Y eso es lo que ocupa este mes.
 
 ## El método: nunca actualizar a ciegas
 
@@ -152,29 +152,78 @@ aún mayor del que habíamos anotado. Aquella primera marca (64.000 tokens en tr
 se quedó corta: en otro reinicio, **77.944 tokens se recuperaron del disco en 287
 milisegundos**, todavía por debajo de las tres décimas, y la primera pregunta tardó
 **un segundo en vez de unos dieciocho**. La mayor recuperación que hemos llegado a ver en
-los registros es de **81.166 tokens en 629 milisegundos**. Y se vio
+los registros es de **81.166 tokens en 629 milisegundos**. (Estos récords salen de los
+registros del motor en uso real; esos registros no viajan publicados en este repo.) Y se vio
 el límite honesto del sistema: el espacio que el programa se asigna a sí mismo para esto
 (12 gigabytes, por defecto) se llena con ocho o diez conversaciones así de grandes, y entonces
 empieza a desalojar las más antiguas —sin romperse nada, y con una opción para ampliarlo si
 algún día hiciera falta.
 
+### 14 de noviembre · La factura del seguro: cuánto cuesta de verdad guardar la conversación
+*banco en frío, pareja controlada*
+
+El arreglo del 12 tenía que tener un precio, y hasta ahora solo sabíamos que no se veía en el
+bench normal. Lo medimos con la pareja que faltaba: la configuración de producción, una copia
+llevando la conversación también en disco y otra sin él, las dos con la misma condición de
+arranque. El precio salió pequeño y, sobre todo, **conocido**: alrededor de un 1 % al escribir
+conversación (entre cifras que se solapan con el ruido de fondo) y entre 1,4 % y 2,9 % en
+tareas de mucho ida y vuelta. El coste se ve en el registro: unos 80 apuntes breves, de una
+diezava de segundo cada uno, al cerrar cada respuesta. Decisión: **se paga**. Lo que ese
+seguro cubre —encender el equipo y volver a donde estabas— es justo lo que un banco de
+pruebas que nunca se apaga a mitad no puede ver. Tabla completa en
+[RESULTADOS.md](RESULTADOS.md).
+
+### 15 de noviembre · La actualización nueva, probada… y rechazada
+*gate fijado antes de medir*
+
+Salió un motor oficial nuevo (el 0.1.60 de la v0.2.14). Lo instalamos y lo probamos contra
+nuestra línea base con una regla escrita **antes** de medir: qué pérdidas son aceptables y
+cuáles no. El motor nuevo aceptaba algo más de borradores, pero era **más lento justo donde
+más importa**: un 5 % más lento en las tareas de mucho ida y vuelta y cerca de un 9 % más
+lento descifrando textos de 32.000 tokens — esta última señal se repitió en las dos
+ejecuciones, que es la firma de algo real y no del azar. La regla lo rechazó: instalado, pero
+sin ponerlo en marcha; la producción se quedó en el 0.1.57.90 de siempre. Esa misma noche
+probamos también a mover la sensibilidad con la que el borrador se acepta (más laxa y más
+estricta); las dos variantes fueron peores que el valor de siempre. De aquella noche quedó
+otra regla más mundana y muy útil: una de las primeras parejas de medidas quedó inservible
+porque la ventana de producción estaba ocupando memoria — **hay que cerrarla antes de cada
+prueba de banco**. Muestras: [benches/muestras/](benches/muestras/).
+
+### 16 de noviembre · Un diccionario nuevo para los borradores, y una palanca que no movió nada
+
+El drafter elige las palabras candidatas de su continuación según un vocabulario; sustituimos el suyo
+por uno nuestro generado con español actual (47.047 palabras, ver [data/README.md](data/README.md)).
+Aceptó 1,7 puntos más de borradores, pero la conversación bajó un 1,7 % y las tareas de agente
+bajaron más. Y aquí viene la parte honesta: ese día todos los ensayos compartían el diccionario
+nuevo y la comparación es contra una ejecución de otro día — **no sabemos separar cuánto es del
+diccionario y cuánto es del día**. Lo declaramos así, y lo adoptamos igual: los borradores de
+palabras en tu idioma son el camino a seguir. La otra palanca del día (que el borrador se
+auto-ajuste durante el uso) se probó dos veces independientes y dio resultados con signos
+contradictorios: ruido. Cerrada. Y la memoria volvió a jugar una pasada: una de las parejas
+bajó solo su tamaño de lectura por falta de memoria libre, pese a la ventana cerrada; la
+repetimos con la máquina más limpia y esa sí fue válida. Las muestras publicadas son las de la
+repetición limpia.
+
 ## Qué se logró, en números comprensibles
 
-Estos son los números publicados por esta misma caja al cerrar el proyecto (5 de noviembre de 2026).
-Para quien no conozca la unidad: un token es aproximadamente media palabra en español;
-82–94 tokens por segundo vienen a ser 40–45 palabras por segundo, más rápido que la mayoría de nosotros tecleamos.
+Estos son los números publicados por esta misma caja, actualizados con la ejecución de
+producción auditada del **14 de noviembre de 2026** (modelo IQ3_S; cada escalón intermedio
+sigue medido con su fecha). Para quien no conozca la unidad: un token es aproximadamente
+media palabra en español; 80–94 tokens por segundo vienen a ser 40–45 palabras por segundo,
+más rápido que la mayoría de nosotros tecleamos.
 
-| Qué hace | Antes (23 de octubre) | Ahora (5 de noviembre) |
+| Qué hace | Antes (ancla del 23-10, `-anclaje98`) | Ahora (14 de noviembre) |
 |---|---|---|
-| Escribir una conversación normal | ~71 tokens/s | **82 tokens/s** *(mediana medida en frío; el uso diario típico ronda ~94 y los mejores tramos llegan a ~125\*)* |
-| Releer y entender un texto de 4.000 tokens | ~1.980 tokens/s | **~2.320 tokens/s** (responde en menos de 2 s) |
-| Releer un texto de 16.000 tokens | ~2.430 tokens/s | **~3.100 tokens/s** |
-| Releer un texto de 32.000 tokens | — (no se medía) | **~3.055 tokens/s** (responde en ~10 s) |
-| Memoria de conversación | 98.000 tokens | **131.000 tokens** (un libro entero) |
+| Escribir una conversación normal | 74,6 tokens/s | **88 de media, 79,5 de mediana** *(el uso diario típico ronda ~94 y los mejores tramos de la ejecución llegan a ~112\*)* |
+| Releer y entender un texto de 4.000 tokens | 1.957,7 tokens/s | **~2.500 tokens/s** (responde en ~1,6 s) |
+| Releer un texto de 16.000 tokens | 2.409,4 tokens/s | **~3.500 tokens/s** (responde en ~4,6 s) |
+| Releer un texto de 32.000 tokens | — (no se medía) | **~3.460 tokens/s** (responde en ~9,3 s) |
+| Memoria de conversación | 98.000 tokens | **94.000 tokens** con IQ3_S (131.000 con IQ3_XXS) |
 | Recuperar del disco una conversación larga | — (no existía) | **81.166 tokens en 629 ms** † |
 
 † Capacidad añadida tras esa baseline, con el parche CacheKV; no estaba en la caja del 5 de noviembre.
-El récord absoluto de restauración desde disco (13 de noviembre, uso real, no un banco de pruebas).
+El récord absoluto de restauración desde disco (13 de noviembre, uso real, no un banco de
+pruebas; cifra tomada de los registros del motor, sin log publicado en este repo).
 La restauración más rápida por debajo de tres décimas fue de 77.944 tokens en 287 ms. Detalle en la
 sección del 13 de noviembre.
 
@@ -193,7 +242,7 @@ Sus dos ejecuciones completas y las del arreglo del párrafo anterior están en
 
 Además de la velocidad, hay dos logros silenciosos que valen tanto como los números:
 
-- **Cero sorpresas en producción.** En dos semanas hubo varios intentos que salieron mal.
+- **Cero sorpresas en producción.** En el mes de trabajo hubo varios intentos que salieron mal.
   Todos se detectaron con las mediciones del mismo día y se revirtieron en minutos, no en días.
   Nunca se estuvo "un poco raro" sin saber por qué.
 - **Un método que se puede repetir.** Cada decisión tiene su fecha, su prueba y su marcha atrás
@@ -228,7 +277,8 @@ esconde nada.
 
 ---
 
-*Crónica escrita el 5 de noviembre de 2026 y ampliada el 12 y 13 de noviembre con la última entrada,
+*Crónica escrita el 5 de noviembre de 2026 y ampliada el 12, el 13 y del 14 al 16 de noviembre
+con las últimas entradas,
 a partir del cuaderno de sesiones del proyecto (append-only,
 desde el 20 de octubre). Todas las cifras son mediciones de esta caja con RX 9070 XT y el motor que
 se indica en cada fecha; donde algo no está medido, se dice. Todo esto se sostiene sobre hombros

@@ -9,7 +9,8 @@ meses) podría volver a intentar.
 El atajo: sustituir una tabla de signos por `_mm256_popcnt_epi32` (instrucción que la
 CPU tiene). Micro-medida pura del kernel: **15-30 % más rápido**. Servidor completo
 (A/B mismo día, `-iqpc0` vs `-iqpc1`): chat **−1,5 %**, prefill plano.
-Moraleja: con el cuello en el PCIe (55 GB/s reales), acelerar el decode CPU de los
+Moraleja: con el cuello en el PCIe (55 GB/s observados en los registros del motor de esta
+caja; cifra de logs, no una muestra de bench publicada aquí), acelerar el decode CPU de los
 cuantizados no mueve el total — y el overhead de la bandera sí.
 
 ## `STRATA_IQ_GATHER=1` — gathers AVX-512 → **−1,4 % chat**
@@ -35,8 +36,10 @@ paso menos caro.
 
 ## `--kv k8v4` (cuantización de la memoria KV) → desastre en AMD
 
-4K **−23,7 %**, 16K **−31,7 %**. Upstream lo reporta casi neutro en CUDA (RTX 3090:
-prompt −2..5 %); la rotación Hadamard de la clave V es mucho más lenta en HIP. Dato a
+4K **−23,7 %**, 16K **−31,7 %** (medida propia; sin muestra publicada en
+`benches/muestras/`). Lo que upstream documenta para CUDA (RTX 3090) es un prompt
+«2-5 % más lento»; calificarlo de casi neutro es valoración nuestra. Que la rotación
+Hadamard de la clave V es mucho más lenta en HIP es inferencia, no medida propia. Dato a
 tener en cuenta en cualquier RDNA 3/4: lo que está medido en NVIDIA no vale aquí.
 
 ## Wheels ROCm nuevos (7.14) + motor experimental → −22 % a 4K
@@ -72,9 +75,12 @@ menos de ~23 GB). Coincide con lo que recomienda upstream.
 Esta es la historia de un negativo que resultó falso, y por eso va aquí y no en
 [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §8.
 
-- **Antes del 03-11** no lo intentamos: upstream lo había medido en familias RDNA 4 y
-  lo reportaba *"gfx1201 (R9700): slower on every prompt"*. Confiamos en esa medida y la
-  apuntamos como descartada, sin replicarla.
+- **Antes del 03-11** no lo intentamos: lo descartamos de oídas, fiados de un supuesto
+  reporte de upstream en RDNA 4 (*"gfx1201 (R9700): slower on every prompt"*) que nunca
+  replicamos. **Comprobado el 17-11: esa frase no está en la documentación actual de
+  upstream**, y su release v0.2.10 medía DFlash2 en R9700 **+6,6 % en prompts cortos y
+  +4,2 % en largos**. De dónde salió aquel recuerdo no lo sabemos; el descarte inicial no
+  se apoyó en ninguna medida verificada.
 - **El 03-11 sí lo medimos**, con el motor 0.1.56 y A/B en frío del mismo día contra el
   cabezal MTP (IQ3_XXS, contexto 131.072): chat **+5,5 % en la mediana** (81,2 vs 77,0),
   4K y 16K planos. **Se adoptó** y es hoy la config de producción (`--draft dflash2`,
@@ -114,6 +120,33 @@ A/B del 30-10 con dos ejecuciones por brazo: chat **−0,1 % / +2,4 %** (gate �
 dos, no cumplido). Un detalle bonito: los borradores aceptados suben **+11 puntos**
 (61-63 % → 72,6-74,3 %) pero el rendimiento no, porque aceptar más tarde no compra
 tokens extra. El primer token mejora un pelo en 4K/16K (≈50-70 ms). Se queda 0,50.
+
+## Motor 0.1.60 (la v0.2.14/0.2.15 oficial) → instalado y NO adoptado: gate fallado (15-11)
+
+Se instaló y se corrió su pareja de gate contra el control sin disco del 14-11 (misma config,
+solo motor y librerías nuevos; chunk 16.384 auditado). En el run2 válido (positivo = más
+lento): chat **+0,78 %**, decodificación 16K **+1,37 %**, 32K **+9,36 %**, agente **+5,28 %**.
+El gate pre-registrado de no-regresión falló por el agente y el 16K, y la decodificación a
+32K peor se repitió en las dos ejecuciones realizadas. A cambio, los borradores aceptados
+subieron +1,0/+1,4 puntos. Sin swap: la producción sigue en 0.1.57.90. Muestra:
+[benches/muestras/engine-0.1.60-iq3s/](benches/muestras/engine-0.1.60-iq3s/); tabla en
+[RESULTADOS.md](RESULTADOS.md).
+
+## `--draft-conf` 0,55 y 0,85 → los dos peores que 0,7 (15-11)
+
+Pareja del 15-11 contra el mismo control sin disco (cada brazo cambia una sola variable,
+chunk 16.384 auditado). Run2 frente al control: 0,55 → chat **+1,85 %** más lento con solo
+68,3 % de borradores aceptados (control: 77,4 %); 0,85 → chat **+3,01 %** más lento pese a
+87,8 % de borradores. Inferencia (etiquetada, no medida): el 0,7 de siempre está cerca del
+óptimo local. Muestras: [benches/muestras/dconf055-0.1.57.90-iq3s/](benches/muestras/dconf055-0.1.57.90-iq3s/)
+y [dconf085-0.1.57.90-iq3s/](benches/muestras/dconf085-0.1.57.90-iq3s/).
+
+## `STRATA_SPEC_ADAPT_EVERY`/`_WARM` (adaptación del borrador en vivo) → sin efecto (16-11)
+
+Dos parejas independientes el mismo día (una a chunk 8.192 y otra re-lanzada a 16.384) dieron
+signos invertidos entre pasadas del propio bench, con magnitudes propias del ruido: nada que
+llevar a la producción. Lever cerrado. Muestra:
+[benches/muestras/specadapt-0.1.57.90-iq3s/](benches/muestras/specadapt-0.1.57.90-iq3s/).
 
 ## Y un aviso sobre el propio proceso
 

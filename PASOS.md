@@ -81,16 +81,17 @@ que se quedó. Otro experimento del mismo día (`STRATA_IQ_GATHER`) tampoco pas�
 
 ## 26-10 — Cambio de modelo y ajustes del usuario
 
-Producción pasó de IQ3_XXS a **IQ3_S** (más calidad, 83,6 GB) y se ajustó la config a
-mano: contexto 131.072, `--spec-min-p 0.5`, reserva de VRAM 1.536 MiB y
-`STRATA_SELECT_WMMA=1`. Se ganó ~17 % a 16K (medido por el usuario el mismo día; el A/B
-formal pendiente). Además: **subset de vocabulario en español** para el cabezal
+Se ajustó la config de producción a mano (el modelo seguía siendo **IQ3_XXS**: el cambio
+a **IQ3_S**, más calidad y 83,6 GB, no llegó hasta el A/B cerrado el 12-11 — ver más
+abajo—): contexto 131.072, `--spec-min-p 0.5`, reserva de VRAM 1.536 MiB y
+`STRATA_SELECT_WMMA=1`. Se midió ~17 % a 16K el mismo día (cifra informal; el A/B
+formal no llegó a hacerse —el aviso está en [RESULTADOS.md](RESULTADOS.md)—). Además: **subset de vocabulario en español** para el cabezal
 predictor MTP (ver [data/README.md](data/README.md)): +0,8 % en chat y +2,8 puntos
 porcentuales de borradores aceptados, con 93 MiB menos de VRAM.
 
 ## 27-10 — Estado de entonces
 
-Motor **0.1.50 oficial**, modelo **IQ3_S**, contexto 131.072, subset español activo,
+Motor **0.1.50 oficial**, modelo **IQ3_XXS** (IQ3_S aún no en producción), contexto 131.072, subset español activo,
 servidor a la escucha en la red local con el servidor endurecido (parche del 19-10
 aplicado sobre v0.1.45 del clon). Documentación del clon sincronizada con v0.2.6.
 
@@ -202,9 +203,10 @@ Al día siguiente lo probamos usándolo de verdad, y quedó la frontera entre ca
 - **Reiniciando**, el disco devuelve la conversación en cientos de ms y el primer request
   baja de ~17-18 s a **2,3 s** (sesión de ~60k) y a **1,1 s** (misma sesión ya en 64k,
   con el disco lleno y expulsión LRU en curso).
-- El techo default de 12.288 MiB **sí se alcanza en uso real** con sesiones de 60k+:
+- El techo default de 12.288 MiB (≈12 GiB) **sí se alcanza en uso real** con sesiones de 60k+:
   caben ~8-10 entradas y las expulsiones LRU empezaron ese mismo arranque. Palanca:
-  `--conversation-cache-disk-mib 30720` (200 G libres en `/`, no urge subirlo).
+  `--conversation-cache-disk-mib 30720` (a 13-11 quedaban 184 GB libres en `/`, ver
+  [HARDWARE.md](HARDWARE.md); no urge subirlo).
 - Dónde termina el umbral declarado del disco (`minimum 60001 tokens`) no lo aclara el
   log: se ven entradas aparcadas y restauradas por debajo. Lo registramos como matiz,
   sin afirmar el mecanismo.
@@ -229,12 +231,64 @@ min levantada con 3,3 GiB disponibles, y lo esperable es que el motor también l
 bajado el chunk al arrancar. No podemos confirmarlo (el endpoint no expone ese estado), así
 que lo dejamos registrado como sospecha. Detalle en [RESULTADOS.md](RESULTADOS.md).
 
+## 14-11 — ¿Cuánto cuesta llevar el KV en disco? (chunk 16.384 forzado)
+
+Montamos la pareja que faltaba para medir el precio del CacheKV: brazo con disco idéntico a
+la producción contra brazo sin disco (misma config salvo los 3 argumentos de disco), suite
+`--long` y `STRATA_GFX12_CHUNK=16` forzado para que ambos brazos corrieran a chunk 16.384.
+Resultado: **~1 % en la media del chat** (88,1 vs 89,1; las medianas quedan dentro del
+ruido) y **1,4–2,9 % en el agente**; el coste se ve en el log como 79 escrituras de espejo
+de 120-140 ms al cerrar respuestas. Decisión: **se mantiene el disco**, con el coste medido
+y conocido — es una prima de seguro contra el prefill tras cada reinicio. Muestras:
+`benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/` y su control sin disco. Tabla en
+[RESULTADOS.md](RESULTADOS.md).
+
+## 15-11 — Gate del motor 0.1.60: fallado; barrido de `--draft-conf`: se queda 0,7
+
+Instalamos el motor 0.1.60 de la release v0.2.14 y corrimos su gate contra el control sin
+disco del 14-11 (misma config, solo motor nuevo). Falló: agente **+5,28 %** más lento, 16K
+**+1,37 %**, 32K **+9,36 %** en decodificación (chat +0,78 %, dentro del gate de ±1,5).
+Cerrado como *instalar sin usar*: producción intacta en 0.1.57.90. Muestra:
+`benches/muestras/engine-0.1.60-iq3s/`.
+
+La misma noche, barrido del umbral de aceptación de borradores: 0,55 → chat **+1,85 %** más
+lento (68,3 % de borradores aceptados); 0,85 → **+3,01 %** más lento pese a 87,8 %. Los dos
+peores que el 0,7 de siempre. Una pareja previa de 23:13/23:20 quedó inválida: el motor
+bajó el chunk a 8.192 porque la ventana de producción ocupaba RAM — regla que quedó: **cerrar
+la ventana de producción antes de cada bench**. Muestras: `dconf055-0.1.57.90-iq3s/` y
+`dconf085-0.1.57.90-iq3s/`.
+
+## 16-11 — Vocabulario de borradores nuevo (es-modern) y el lever `SPEC_ADAPT`, cerrado
+
+Sustituimos el vocabulario de borradores del drafter por `data/draft_vocab_es-modern.bin`
+(47.047 ids, ver [data/README.md](data/README.md)). Medido el 16-11 (run2, chunk 16.384):
+borradores aceptados **+1,7 puntos** (79,1 %), pero chat −1,7 % y agente −2,6…−7,2 % frente
+al control del 14-11. Todos los brazos del día comparten el vocab nuevo y el control es de
+otro día: **la atribución no es separable**; se adopta con la duda declarada. Control vigente
+desde entonces: `2026-11-16-1502-ctrl-nuevo-vocab-chunk16384-iq3-s`. Muestra:
+`benches/muestras/vocab-es-nuevo-0.1.57.90-iq3s/`.
+
+`STRATA_SPEC_ADAPT_EVERY`/`_WARM` (adaptación del borrador en vivo): dos parejas
+independientes el mismo día dieron signos invertidos entre pasadas — firma de ruido. Lever
+cerrado. Muestra: `benches/muestras/specadapt-0.1.57.90-iq3s/`.
+
+Y otra lección de RAM: la pareja de las 14:37/14:48 no alcanzó chunk 16.384 pese a la ventana
+cerrada (quedaban ~57,8 GiB disponibles y al guard le faltaban ~2,7 GiB; el motor bajó solo a
+8.192). Re-lanzamos a las 15:02/15:12 con la máquina más limpia y ahí sí auditamos 16.384.
+Las muestras publicadas son las de la re-lanzada.
+
+Desde la v0.2.15, además, el servidor oficial **retiró la elección automática de DFlash2 en
+gfx1201**: nuestras configs de [configs/](configs/) declaran `"drafting": "dflash2"`
+explícitamente. El servidor y los docs del clon son ya espejo de v0.2.15; el motor en marcha
+sigue siendo el 0.1.57.90 parcheado.
+
 ## Lección de fondo (octubre y principios de noviembre)
 
-**Casi todo lo que prometía era ruido, y lo que funcionó son nueve cosas concretas y
+**Casi todo lo que prometía era ruido, y lo que funcionó son diez cosas concretas y
 medidas**: la tabla C2, el subset español, la reserva/flags de la config final, el
 protocolo de medición en sí, el runtime ROCm propio, GDN gfx12, el drafter DFlash2, el
-anillo de prompt más profundo y el KV en disco persistente. Y una advertencia que aprendimos
+anillo de prompt más profundo, el KV en disco persistente y el vocabulario de borradores en
+español moderno (este último con atribución incompleta, declarada). Y una advertencia que aprendimos
 sobre la marcha: una mejora real puede ser **invisible para el bench estándar**; si el
 cambio actúa sobre el arranque y no sobre el camino caliente, hay que medirlo con un
 protocolo propio.

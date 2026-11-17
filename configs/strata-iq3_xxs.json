@@ -86,6 +86,7 @@
   "backend": "hip",
   "gpu": 0,
   "gpus_asked": true,
+  "drafting": "dflash2",
   "vision": {
     "exe": "/home/TU-USUARIO/.local/share/strata/components/engine/0.1.57-linux-x86_64-hip-rx9070/strata-vision",
     "mmproj": "/home/TU-USUARIO/Strata-data/models/mmproj-Qwen3.8-Flash-Next-Q8_0.gguf",

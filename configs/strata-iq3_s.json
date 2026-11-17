@@ -88,5 +88,11 @@
   "port": 8081,
   "backend": "hip",
   "gpu": 0,
-  "gpus_asked": true
+  "gpus_asked": true,
+  "drafting": "dflash2",
+  "sampling": {
+    "temperature": 0.6,
+    "top_p": 0.8,
+    "top_k": 20
+  }
 }

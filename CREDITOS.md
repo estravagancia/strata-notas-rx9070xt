@@ -4,7 +4,8 @@
   MIT, © Niko1221 y contribuidores. Todo lo que hay aquí por encima de Strata son notas
   y parches propios; lo que hay dentro de los parches (contexto de código) es de Strata.
 - **Versiones usadas**: clon en el lanzamiento v0.1.45; compilaciones propias desde las
-  etiquetas v0.2.2 (motor 0.1.46), v0.2.3 (`5c8dd322`, motor 0.1.48), v0.2.4 (`96ca4383`,
+  etiquetas v0.2.2 (motor 0.1.47, verificado el 17-11 en su `CMakeLists.txt`), v0.2.3
+  (`5c8dd322`, motor 0.1.48), v0.2.4 (`96ca4383`,
   motor 0.1.49); después, **paquetes oficiales** sin compilar: 0.1.50 (v0.2.5),
   0.1.52 (v0.2.7), 0.1.54 (v0.2.8), 0.1.55 (v0.2.9) y, desde el 03-11/05-11, **0.1.56 y
   0.1.57**, todos
@@ -12,9 +13,11 @@
   (0.1.55: `88a19b89…4a77`). Desde el 12-11, en producción un motor **propio: `0.1.57.90`**
   = la etiqueta v0.2.11 más el parche CacheKV de un fork ajeno (ver la siguiente viñeta),
   compilado por nosotros con el `packaging/build_hip_linux.sh` del tag
-  (`scripts/install-01590.sh`). La documentación del clon está sincronizada con **v0.2.13**
-  (sincronizada el 09-11; los motores en marcha siguen siendo los de la familia 0.1.57),
-  con el endurecimiento local reaplicado.
+  (`scripts/install-01590.sh`). El 15-11 se instaló además el motor oficial **0.1.60**
+  (v0.2.14) para su gate: NO adoptado (falló la no-regresión; ver
+  [RESULTADOS.md](RESULTADOS.md)). La documentación y el servidor del clon están sincronizados
+  con **v0.2.15** (con el endurecimiento local reaplicado; los motores en marcha siguen
+  siendo los de la familia 0.1.57).
 - **Parche CacheKV** (el motor `0.1.57.90`): es trabajo de **kinoyu-ai**, fork público
   [github.com/kinoyu-ai/Strata-CacheKV-kinoyu](https://github.com/kinoyu-ai/Strata-CacheKV-kinoyu).
   Nosotros solo lo aplicamos sobre una etiqueta concreta y lo medimos; el diff que publicamos
@@ -28,8 +31,14 @@
   Sin ROCm en el sistema.
 - **llama.cpp**: fijado en `3cf03257` (el pin del repositorio Strata de aquella rama).
 - **Modelo**: Qwen3.8-Flash-Next en cuantizaciones **IQ3_XXS** e **IQ3_S**, ambas en
-  producción de forma indistinta; packs `…-GSQ-RCO-…` descargados por el propio setup de Strata.
-  Vector de control de negación: `Huihui-Qwen3.8-Flash-Next-refusal-direction-r.gguf`.
+  producción **IQ3_S** desde el 12-11 (IQ3_XXS fue el modelo de producción hasta esa
+  fecha y queda como alternativa para contexto largo); packs `…-GSQ-RCO-…` descargados por el propio setup de Strata.
+  Vector de control de negación: `Huihui-Qwen3.8-Flash-Next-refusal-direction-r.gguf`, publicado en
+  [alesha-pro/Qwen3.8-Flash-Next-abliterated-GSQ-RCO-Strata-GGUF](https://huggingface.co/alesha-pro/Qwen3.8-Flash-Next-abliterated-GSQ-RCO-Strata-GGUF)
+  (la dirección de negativa procede de los pesos de huihui-ai; verificado el 17-11).
+- **Vocabularios de borradores** (`data/draft_vocab_es.bin` y
+  `data/draft_vocab_es-modern.bin`): propios, generados en esta caja a partir de corpus de
+  chats reales en español; cómo se generan, en [data/README.md](data/README.md).
 - **Herramienta de bench**: `tools/strata_bench.py` del propio Strata; el protocolo en
   frío y el script son propios (documentados aquí).
 - Los docs de Strata [AMD_HIP.md](https://github.com/Niko1221/Strata/blob/main/docs/AMD_HIP.md)

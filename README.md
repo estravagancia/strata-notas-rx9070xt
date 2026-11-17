@@ -17,28 +17,27 @@ La producción de esta caja es hoy **Qwen3.8-Flash-Next en IQ3_S** (83,6 GB en d
 **0.1.57.90** (la etiqueta v0.2.11 + un parche de un fork ajeno, ver
 [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §10), 16 GiB de VRAM y ~60 GB de RAM, sobre un
 runtime **ROCm 10.3 propio** (ver más abajo). Es la ejecución auditada `run2` del brazo de
-producción del 12-11 (`benches/muestras/cachekv-0.1.57.90-iq3s/`, con su control
-0.1.57 oficial al lado); las de **IQ3_XXS** (contexto 131.072, del 05-11) siguen en
-[RESULTADOS.md](RESULTADOS.md):
+producción con disco del 14-11 (`benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/`, con su
+control sin disco del mismo día al lado); el control vigente del 16-11 y las series completas
+están en [RESULTADOS.md](RESULTADOS.md):
 
 | Métrica | Valor |
 |---|---|
-| Escritura tipo chat (dominio común) | **~88 tokens/s** de media de la ejecución (mediana 79,0; rango 74,6-110,1) |
-| Relectura de un texto de 4.000 tokens | **~2.440 tokens/s** (empieza a responder en ~1,67 s) |
-| Relectura de 16.000 tokens | **~3.460 tokens/s** (primer token en ~4,67 s) |
-| Relectura de 32.000 tokens | **~3.160 tokens/s** (primer token en ~10,2 s; medido el 13-11, cota baja, ver [RESULTADOS.md](RESULTADOS.md)) |
+| Escritura tipo chat (dominio común) | **~88 tokens/s** de media de la ejecución (mediana 79,5; rango 72,2-112,4; borradores aceptados 78,5 %) |
+| Relectura de un texto de 4.000 tokens | **~2.500 tokens/s** (empieza a responder en ~1,63 s) |
+| Relectura de 16.000 tokens | **~3.500 tokens/s** (primer token en ~4,61 s) |
+| Relectura de 32.000 tokens | **~3.460 tokens/s** (primer token en ~9,3 s; chunk de prompt 16.384 forzado en la misma ejecución) |
 | Contexto máximo | 94.000 tokens en IQ3_S (131.072 con IQ3_XXS) |
 | Reinicio con la conversación abierta | prefill **−92,7 %** (el KV se restaura del disco) |
 
 Sobre esas cifras: el chat es la media y la mediana de la misma ejecución auditada; en el uso
 diario con borradores aceptados se cae en la parte alta del rango (ese ~94 tokens/s que
-pubblicamos antes era una estimación típica del uso, no una medida). La fila de 32K no
-viene de la pareja del 12-11 (esa no usó `--long`): la midió el 13-11 una ejecución de
-banco de pruebas en frío con `--long`, con la misma config de producción y la producción
-intacta (puerto aparte). En esa ejecución quedaban ~8,8 GiB libres de RAM al arrancar, y el
-motor bajó solo el tamaño de chunk de prompt de 16.384 a 8.192; por eso su 16K salió ~7 %
-por debajo del de la tabla y el 32K hay que leerlo como **cota baja**. La muestra auditada
-está en [benches/muestras/long-0.1.57.90-iq3s/](benches/muestras/long-0.1.57.90-iq3s/).
+publicamos antes era una estimación típica del uso, no una medida). Las tres filas de
+relectura vienen de esa misma ejecución del 14-11 (suite `--long`, chunk de prompt 16.384
+forzado). Como contraste, la muestra del 13-11
+([benches/muestras/long-0.1.57.90-iq3s/](benches/muestras/long-0.1.57.90-iq3s/)) se hizo con ~8,8 GiB
+libres de RAM al arrancar: el motor bajó solo el chunk de 16.384 a 8.192 y dio 3.163 en 32K,
+cifra que hay que leer como **cota baja** en esas condiciones de memoria.
 Como referencia histórica: la config anterior con IQ3_XXS y anillo profundo (05-11) daba
 ~3.055 tokens/s en 32K. Los porcentajes de DFlash2 (+12 %/+13 %) y del anillo (+11 %/+14 %) son
 estimaciones previas al A/B; las ganancias auditadas de esos A/B son **+5,5 % de chat
@@ -72,21 +71,25 @@ larga y más útil, de cosas que se midieron y **no** mejoraron nada.
    parche CacheKV de un fork ajeno tal como lo aplicamos (sí en producción).
 6. [configs/](configs/) y [scripts/](scripts/) — la configuración real y los scripts de
    medidas (bench en frío, y el test con reinicio que necesita el KV en disco).
-7. [benches/muestras/](benches/muestras/) — 12 mediciones completas para que audites las tablas.
+7. [benches/muestras/](benches/muestras/) — 19 ejecuciones completas para que audites las tablas.
 8. [CREDITOS.md](CREDITOS.md) — de dónde viene cada pieza.
 
-## Estado actual (12-11-2026)
+## Estado actual (16-11-2026)
 
 Motor **propio `0.1.57.90`** = etiqueta oficial v0.2.11 (motor 0.1.57) + el parche CacheKV
 del fork kinoyu-ai, con las flags `--conversation-cache-dir` y `--conversation-cache-persist`
 activas; `STRATA_GDN_CHUNKED=1`, `STRATA_EXPDEC=0`, `STRATA_PLE_AUTO_RAM=0`,
-`STRATA_PREFILL_CPU_SHARE=0` y drafter **DFlash2** (`--draft dflash2`, pack `q4_0`
-dedicado), sobre **ROCm 10.3 propio** (hipBLASLt 1.5.0, tabla de 168 filas regenerada
-aquí). Modelo **IQ3_S** en producción (contexto 94.000, sin visión), **IQ3_XXS** como
-alternativa (contexto 131.072). El proyecto Strata sigue sobre el clon v0.1.45 con el
-endurecimiento propio; la documentación del clon es espejo de v0.2.13 con el
-endurecimiento local reaplicado (ojo: los docs describen v0.2.13 mientras el motor en
-marcha es el 0.1.57 parcheado).
+`STRATA_PREFILL_CPU_SHARE=0`, `STRATA_HC_Q8=0` y drafter **DFlash2** (`--draft dflash2`,
+pack `q4_0` dedicado, con el vocabulario de borradores en español
+`data/draft_vocab_es-modern.bin`, instalado el 15-11 y adoptado el 16-11), sobre **ROCm 10.3 propio** (hipBLASLt 1.5.0, tabla de 168 filas
+regenerada aquí). Modelo **IQ3_S** en producción (contexto 94.000, sin visión), **IQ3_XXS**
+como alternativa (contexto 131.072). El proyecto Strata sigue sobre el clon v0.1.45 con el
+endurecimiento propio; el servidor y la documentación del clon son espejo de **v0.2.15** con
+el endurecimiento local reaplicado (ojo: los docs describen v0.2.15 mientras el motor en
+marcha es el 0.1.57 parcheado; el 0.1.60 de v0.2.14/0.2.15 está instalado
+en esta caja, pero NO se adoptó: gate de no-regresión fallado, ver [RESULTADOS.md](RESULTADOS.md)).
+Desde v0.2.15 el servidor retiró la elección automática de DFlash2 en gfx1201: por eso las
+dos configs de [configs/](configs/) declaran `"drafting": "dflash2"` explícitamente.
 
 ## Aviso
 

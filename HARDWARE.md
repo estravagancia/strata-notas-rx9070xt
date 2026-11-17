@@ -63,3 +63,14 @@ Etiqueta de modelos: la producción actual es **IQ3_S**; **IQ3_XXS** fue la prod
   (en un arranque con menos VRAM libre, 9,88 GiB en vez de ~10,2, bajó a 3.170); con
   **IQ3_XXS** y visión activada **5.025 (8,15 GiB)** y 3.710 (6,05 GiB) en el laboratorio
   con 3.072 MiB reservados.
+- La caja tiene un **guard de RAM que ajusta el chunk de prompt al arrancar**; su umbral
+  es interno del motor y **no lo publica en GiB**, así que aquí solo van los arranques
+  observados: el 13-11, con ~8,8 GiB libres (producción en marcha), el motor bajó el chunk
+  de 16.384 a 8.192; el 16-11 a las 14:37 lo bajó también con 57,8 GiB disponibles
+  («faltaban ~2,7 GiB» según el registro, ver [RESULTADOS.md](RESULTADOS.md)); en cambio,
+  las ejecuciones válidas del 14-11 partieron de 58,4 GiB y mantuvieron 16.384. Con esos
+  tres datos **no se puede fijar el umbral** (la exigencia del motor varía con lo que
+  estaba corriendo antes del arranque) y no lo afirmamos.
+  En los benches aquí se fuerza el chunk con `STRATA_GFX12_CHUNK=16` y se audita el
+  `server.log` de cada ejecución. Consecuencia práctica: dos ejecuciones grandes solo son
+  comparables si la máquina estaba en condiciones parecidas al arrancar.
