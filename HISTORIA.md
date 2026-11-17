@@ -1,6 +1,6 @@
 # Historia de una caja
 
-*Tres semanas (del 20 de octubre al 13 de noviembre de 2026) convirtiendo un PC de casa
+*(Desde el 20 de octubre hasta 17 de noviembre de 2026) convirtiendo un PC de casa
 en un servidor de inteligencia artificial. Lo que se hizo, qué se logró y qué se aprendió.
 Sin tecnicismos: los números concretos están en [RESULTADOS.md](RESULTADOS.md).*
 
@@ -125,6 +125,9 @@ por adelantado. En textos de 16.000 y 32.000 tokens no aporta nada: ahí el cuel
 La marcha atrás preparada, por si acaso, sigue siendo una sola variable.
 
 ### 12 de noviembre · Un arreglo de fuera: la conversación sobrevive a apagar el PC
+
+Le pedí al modelo que buscase en los fork de Strata a ver si había algo interesante para aplicar en este equipo... Y descubrió un fork interesante, que dependiendo del uso, en mi caso aplica, y ahorra mucho tiempo.
+
 *parche CacheKV del fork de kinoyu-ai, sobre la versión oficial v0.2.11*
 
 Alguien más se había encontrado con el mismo problema: al apagar el equipo se pierde la memoria de
