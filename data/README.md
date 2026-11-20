@@ -53,7 +53,7 @@ cobertura 0,99.
   en ambas eras**): aceptación mediana **77,2 %** con este vocab (n=78) frente a
   **70,4 %** con el viejo (n=16). Una lectura inicial desfavorable (60,7 %) resultó estar
   contaminada por arranques **sin drafter** —ver el matiz en
-  [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §11— y quedó corregida el mismo día.
+  [LO-QUE-FUNCIONO.md](../LO-QUE-FUNCIONO.md) §11— y quedó corregida el mismo día.
 - Decisión registrada: mantener `es-modern` (el usuario, 16-11: «no lo restauramos»).
 
 **Reversión**: copiar `draft_vocab_es.bin` (o el backup `draft_vocab.bin.pre-esmodern-20261115.bak`
