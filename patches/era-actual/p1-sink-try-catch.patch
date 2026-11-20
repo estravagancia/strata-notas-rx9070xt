@@ -1,0 +1,32 @@
+commit 4a7d49cb9975860b94a2e3bcbccf8b20afc21434
+Author: estravagancia <estravagancia@users.noreply.github.com>
+Date:   Wed Nov 18 23:36:11 2026 +0000
+
+    P1: fixes de build HIP — sink try/catch, shim L2 sin guard AMD, snapshot_sources duplicado fuera
+    
+    - conversation_state.cpp: la sobrecarga QsaState& de conversation_snapshot_sources del
+      parche CacheKV duplicaba la que v0.2.16 ya define al final del archivo; eliminada.
+    - strata_gpu_engine.cmake: el shim de atributos L2 para mmvq_il_parity quedaba excluido
+      en __HIP_PLATFORM_AMD__ (justo donde faltan los ids); guard quitado.
+    - conversation_cache.hpp: drop_ollder ahora traga excepciones del sink (v0.2.16 llama a
+      sink_ sin try/catch; el contrato de CacheKV es spill fallido = descartar entrada).
+    
+    Build verde con ROCm 7.2.1 + symlink libxml2.so.2 (decisión: entorno de los .9x).
+    mmvq_il_parity OK bitwise en gfx1200; ctest CacheKV 5/5.
+
+diff --git a/engine/include/strata/core/conversation_cache.hpp b/engine/include/strata/core/conversation_cache.hpp
+index f342b15a8..52e33a803 100644
+--- a/engine/include/strata/core/conversation_cache.hpp
++++ b/engine/include/strata/core/conversation_cache.hpp
+@@ -602,7 +602,10 @@ private:
+             SavedConversation victim = sink_ ? std::move(entries_[i]) : SavedConversation{};
+             erase(i);
+             ++evictions_;
+-            if (sink_) sink_(std::move(victim));   // (its RAM is freed when the sink is done with it)
++            if (sink_) {   // (its RAM is freed when the sink is done with it; a failed spill just drops the entry)
++                try { sink_(std::move(victim)); }
++                catch (...) { std::fprintf(stderr, "strata serve: RAM cache spill failed; dropping evicted conversation\n"); }
++            }
+             return true;
+         }
+         return false;

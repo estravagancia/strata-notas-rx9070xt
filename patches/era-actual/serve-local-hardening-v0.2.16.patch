@@ -1,0 +1,761 @@
+diff --git a/terminal/serve/server.py b/terminal/serve/server.py
+index b91f8bf05..7c905f6f3 100644
+--- a/terminal/serve/server.py
++++ b/terminal/serve/server.py
+@@ -2798,6 +2798,87 @@ class StrataEngine:
+ IMAGE_URL_MAX = 32 << 20        # an image URL is read up to this (the web app attaches pictures of up to 20 MB)
+ 
+ 
++def flag_env(name: str) -> bool:
++    """A switch in the environment: "1" (or "true", "yes", case-insensitive) is on, anything else - including unset -
++    is off."""
++    return os.environ.get(name, "").strip().lower() not in ("", "0", "false", "no")
++
++
++def verbose_errors() -> bool:
++    """Whether the sentences a client gets for a failed image carry the detail (an exception's text, a path, a port).
++    Off: a client cannot use the server as a probe, and the detail goes to the server's window.  STRATA_VERBOSE_ERRORS=1
++    turns it on while debugging."""
++    return flag_env("STRATA_VERBOSE_ERRORS")
++
++
++def image_url_allow_internal() -> bool:
++    """Whether an image URL may point at this PC itself (127.0.0.1, ::1) or at a link-local address.  Off: a picture's
++    URL is not a reason to make the server fetch http://127.0.0.1:<port>/ or http://169.254.169.254/ for whoever sent
++    it.  STRATA_IMAGE_URL_ALLOW_INTERNAL=1 (or "image_url_allow_internal": true in the run config, which sets that
++    variable) allows it."""
++    return flag_env("STRATA_IMAGE_URL_ALLOW_INTERNAL")
++
++
++class UrlRefused(Exception):
++    """An image URL that must not be read, with the reason: the window gets it, the client gets one sentence."""
++
++
++def image_url_refusal(url: str, allow_internal: bool | None = None) -> str | None:
++    """Why `url` must not be read, or None when it may be.  Refused: the loopback and the link-local addresses
++    (127.0.0.1, ::1, 169.254.169.254, fe80::), multicast and the unspecified address.  A LAN address (10/8,
++    172.16/12, 192.168/16) is allowed: this is a home server, and a picture on another machine of one's own network is
++    a normal thing to send.  Every address the host resolves to is checked, so a name whose DNS says 127.0.0.1 is
++    refused like the address itself."""
++    if allow_internal is None:
++        allow_internal = image_url_allow_internal()
++    parts = urlsplit(url)
++    if not parts.hostname:
++        return "the URL names no host"
++    port = parts.port or (443 if parts.scheme == "https" else 80)
++    try:
++        infos = socket.getaddrinfo(parts.hostname, port, proto=socket.IPPROTO_TCP)
++    except (socket.gaierror, UnicodeError, ValueError) as e:
++        return f"its host could not be resolved ({e})"
++    import ipaddress
++    for info in infos:                                  # str/bytes of the address, per family
++        try:
++            ip = ipaddress.ip_address(info[4][0])
++        except ValueError:
++            continue
++        if ip.is_multicast or ip.is_unspecified:
++            return f"{parts.hostname} is {ip}, which is not a machine"
++        if not allow_internal and (ip.is_loopback or ip.is_link_local):
++            return (f"{parts.hostname} is {ip} (this PC itself, or a link-local address): "
++                    f"STRATA_IMAGE_URL_ALLOW_INTERNAL=1 allows it")
++    return None
++
++
++class ImageRedirects(urllib.request.HTTPRedirectHandler):
++    """At most 3 hops, and every hop's destination is checked like the first one.  Without this a host that answers 302
++    with `Location: http://127.0.0.1:8081/status` took the server to its own endpoints (the audit's third finding),
++    since only the original URL had been looked at."""
++
++    max_redirections = 3
++
++    def redirect_request(self, req, fp, code, msg, headers, newurl):
++        refusal = image_url_refusal(newurl)
++        if refusal:
++            raise UrlRefused(f"{newurl}: {refusal}")
++        return super().redirect_request(req, fp, code, msg, headers, newurl)
++
++
++def image_file_limit() -> int:
++    """The most a local image file may hold, in bytes: 32 MiB, the same bound as an image URL (the web app attaches
++    pictures of up to 20 MB).  STRATA_MAX_IMAGE_FILE_MIB changes it (0 or an unreadable value: the default).  Checked
++    with os.path.getsize before the file is opened, so a 28 GB shard named .png is a 400 and never enters the server's
++    memory."""
++    try:
++        mib = int(os.environ.get("STRATA_MAX_IMAGE_FILE_MIB", "0"))
++    except ValueError:
++        mib = 0
++    return mib << 20 if mib > 0 else IMAGE_URL_MAX
++
++
+ def card_free_mib(index: int | None, amd: bool = False) -> int | None:
+     """Free memory of one card in MiB, from the backend's reader (NVML, the amdgpu files); None when it cannot be read (nothing is refused for that)."""
+     try:
+@@ -2852,6 +2933,12 @@ class Vision:
+         self.on_cpu = False                             # the CPU reader is what runs (the GPU one did not start, or there was no room)
+         self.cpu_note = None                            # why, in words for the person (strata_control/reader_room.py), when the card had no room
+         self.reader = None                              # "own" (Strata's) or "mtmd" (llama.cpp's) from the READY line; None for an older reader
++        where = cfg.get("image_dir") or os.environ.get("STRATA_IMAGE_DIR") or ""
++        # opt-in: with "image_dir" in the vision section (or STRATA_IMAGE_DIR) a local picture has to be inside that
++        # directory; unset, any file the server can read is still read, bounded by image_file_limit().
++        self.image_dir = os.path.realpath(os.path.expanduser(str(where))) if where else None
++        if self.image_dir and not os.path.isdir(self.image_dir):
++            raise RuntimeError(f'"image_dir" is not a directory: {self.image_dir}')
+         self.proc = None
+         self.stopped = True
+         self.lock = threading.Lock()
+@@ -3132,7 +3219,10 @@ class Vision:
+         self._start()
+ 
+     @staticmethod
+-    def load(source: str) -> bytes:
++    def load(source: str, image_dir: str | None = None) -> bytes:
++        """What encode() reads: a data: URL, an http(s) URL, or a path on this computer.  A local file is bounded by
++        image_file_limit() before it is opened, and when the config sets "image_dir" it has to be inside that directory.
++        Anything not read is a ValueError (a 400 that says why)."""
+         if source.startswith("data:"):
+             try:
+                 return base64.b64decode(source.split(",", 1)[1])
+@@ -3148,25 +3238,55 @@ class Vision:
+             raise ValueError("an image file must be on this computer: network paths (\\\\host\\share, //host/share, "
+                              "file://host/...) are not read")
+         if path and os.path.isfile(path):
++            try:
++                size = os.path.getsize(path)
++            except OSError as e:
++                raise ValueError(f"the image could not be read from {path} ({e})") from None
++            limit = image_file_limit()
++            if size > limit:
++                raise ValueError(f"the image file is over {limit >> 20} MiB ({size >> 20} MiB): raise "
++                                 f"STRATA_MAX_IMAGE_FILE_MIB only for a file this server should read")
++            if image_dir and not Vision.inside_image_dir(path, image_dir):
++                raise ValueError(f"the image file {path} is outside \"image_dir\" ({image_dir}): the server only "
++                                 f"reads pictures from that directory")
+             try:
+                 return Path(path).read_bytes()
+             except OSError as e:
+                 raise ValueError(f"the image could not be read from {path} ({e})") from None
+         raise ValueError("an image must be a data: URL, an http(s) URL or a local file path")
+ 
++    @staticmethod
++    def inside_image_dir(path: str, root: str) -> bool:
++        """Whether `path`, with every link and ".." resolved, is inside `root` (both are real paths)."""
++        try:
++            return os.path.commonpath([os.path.realpath(path), root]) == root
++        except ValueError:                                       # different drives on Windows
++            return False
++
+     @staticmethod
+     def download(url: str) -> bytes:
+-        """An image URL's bytes, at most IMAGE_URL_MAX of them: the whole response was read, so a huge or endless one
+-        filled the memory.  One that cannot be read is a ValueError (a 400 that says so), not a dropped connection."""
++        """An image URL's bytes, at most IMAGE_URL_MAX of them.  The host is checked first (image_url_refusal) and the
++        destination of every redirect after it.  A URL that cannot be read, or must not be, is a ValueError (a 400): the
++        reason goes to the server's window, and the client gets one sentence unless STRATA_VERBOSE_ERRORS=1."""
+         too_big = f"the image URL's file is over {IMAGE_URL_MAX >> 20} MiB"
++        neutral = "the image URL could not be read"
++        refusal = image_url_refusal(url)
++        if refusal:
++            print(f"[strata] refused the image URL {url!r}: {refusal}", flush=True)
++            raise ValueError(refusal if verbose_errors() else neutral)
+         try:
+-            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "strata"}), timeout=60) as r:
++            opener = urllib.request.build_opener(ImageRedirects())
++            with opener.open(urllib.request.Request(url, headers={"User-Agent": "strata"}), timeout=60) as r:
+                 size = r.headers.get("Content-Length") or ""
+                 if size.isdigit() and int(size) > IMAGE_URL_MAX:
+                     raise ValueError(too_big)
+                 data = r.read(IMAGE_URL_MAX + 1)
++        except UrlRefused as e:
++            print(f"[strata] refused the image URL {url!r}: {e}", flush=True)
++            raise ValueError(str(e) if verbose_errors() else neutral) from None
+         except (OSError, HTTPException) as e:
+-            raise ValueError(f"the image URL could not be read: {e}") from None
++            print(f"[strata] the image URL {url!r} could not be read: {e}", flush=True)
++            raise ValueError(f"the image URL could not be read: {e}" if verbose_errors() else neutral) from None
+         if len(data) > IMAGE_URL_MAX:
+             raise ValueError(too_big)
+         return data
+@@ -3178,9 +3298,15 @@ class Vision:
+         try:
+             import io
+             from PIL import Image
++        except ImportError:
++            return False
++        try:
+             with Image.open(io.BytesIO(data), formats=PICTURE_FORMATS) as im:
+                 return im.getexif().get(0x0112, 1) not in (None, 0, 1)
+-        except Exception:  # noqa: BLE001 - any failure leaves the image as it was sent
++        except Image.DecompressionBombError as e:
++            raise ValueError(f"the image is too large to read ({e}); raise Pillow's Image.MAX_IMAGE_PIXELS only if "
++                             f"this server has the memory for it") from None
++        except Exception:  # noqa: BLE001 - any other failure leaves the image as it was sent
+             return False
+ 
+     @staticmethod
+@@ -3229,7 +3355,8 @@ class Vision:
+     def encode(self, source: str | bytes, keep=()) -> tuple[Path, int]:
+         """-> (embeddings file, number of image tokens).  `source`: what load() reads, or the image's bytes.
+         `keep`: files the caller still needs (never evicted by this call)."""
+-        data = self.normalize(source if isinstance(source, bytes) else self.load(source))
++        data = self.normalize(source if isinstance(source, bytes)
++                              else self.load(source, getattr(self, "image_dir", None)))
+         key = hashlib.sha256(data).hexdigest()[:32]
+         with self.lock:
+             self._ensure_dir()
+@@ -8510,6 +8637,12 @@ def _main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> i
+         print("[strata] Host check off: any name reaches this server (allowed_hosts \"*\")" if "*" in svc.allowed_hosts
+               else f"[strata] also answers to the host names {', '.join(svc.allowed_hosts)} (allowed_hosts)", flush=True)
+     svc.api_monitor = a.api_monitor or cfg.get("api_monitor") is True
++    if cfg.get("image_url_allow_internal") is True:
++        # a picture URL may point at this PC itself (image_url_refusal reads the variable; a run config key, like
++        # allowed_hosts, cannot be read from a static method)
++        os.environ["STRATA_IMAGE_URL_ALLOW_INTERNAL"] = "1"
++        print("[strata] image URLs may point at this PC itself and at link-local addresses "
++              "(image_url_allow_internal)", flush=True)
+     if svc.api_monitor:
+         print("[strata] API request monitor on (/api-monitor): the last 100 requests' prompts and answers are kept in "
+               "memory" + ("" if svc.api_key else "; anyone who can reach this server can read them (no API key)"),
+diff --git a/terminal/serve/test_image_bombs.py b/terminal/serve/test_image_bombs.py
+new file mode 100644
+index 000000000..5201ff75c
+--- /dev/null
++++ b/terminal/serve/test_image_bombs.py
+@@ -0,0 +1,84 @@
++"""A JPEG that declares gigapixels in its frame header: Pillow reads that size in Image.open and refuses the image as a
++decompression bomb, and `Vision._exif_rotated` used to catch that refusal with a bare `except Exception` and answer
++"not rotated" - which sent the bytes down the passthrough path, where strata-vision's decoder (stb_image) has no bound
++of its own.  A few hundred bytes of JPEG could ask for hundreds of gigapixels of memory (the audit's finding).
++
++Now the refusal is a ValueError (a 400) from the same place.  What is NOT covered here: a PNG/BMP/GIF that goes
++passthrough without Pillow touching it (step 3, point 3: `image_dimensions()` and the number that comes out of the
++measurement window), and a JPEG of a size Pillow only warns about (89-179 MP, `test_between_the_warning_and_the_error`).
++
++    python -m unittest serve.test_image_bombs -v
++"""
++import io
++import unittest
++import warnings
++
++from PIL import Image
++
++from serve.server import Vision
++
++
++def declared_jpeg(width: int, height: int) -> bytes:
++    """A JPEG of 633 bytes that declares `width`x`height`: a real 8x8 JPEG with the two size fields of its SOF0 frame
++    header rewritten, so it is a header Pillow reads and its own bomb check refuses before anything decodes."""
++    buf = io.BytesIO()
++    Image.new("RGB", (8, 8), (255, 0, 0)).save(buf, format="JPEG")
++    data = bytearray(buf.getvalue())
++    sof = data.index(b"\xff\xc0")                       # SOF0: FF C0 len(2) precision(1) height(2) width(2)
++    assert sof < data.index(b"\xff\xda"), "SOF0 comes before the scan in a baseline JPEG"
++    data[sof + 5:sof + 7] = height.to_bytes(2, "big")
++    data[sof + 7:sof + 9] = width.to_bytes(2, "big")
++    return bytes(data)
++
++
++class Bombs(unittest.TestCase):
++    def test_the_fixture_is_a_bomb_by_pillows_own_check(self):
++        """What the finding is about: Pillow refuses these bytes (and the old bare except turned that into "not
++        rotated")."""
++        with self.assertRaises(Image.DecompressionBombError):
++            Image.open(io.BytesIO(declared_jpeg(30000, 30000)))
++
++    def test_the_refusal_is_a_400_and_not_a_passthrough(self):
++        with self.assertRaisesRegex(ValueError, "the image is too large to read"):
++            Vision.normalize(declared_jpeg(30000, 30000))
++
++    def test_the_exif_read_raises_instead_of_answering_false(self):
++        """The exact regression: False here meant "not rotated", and normalize() passed the bytes through."""
++        with self.assertRaisesRegex(ValueError, "the image is too large to read"):
++            Vision._exif_rotated(declared_jpeg(60000, 60000))
++
++    def test_the_bytes_are_not_decoded_to_decide(self):
++        """The verdict comes from the header: the same bytes are refused, and no pixels are read (the file is 633 bytes
++        and declares 60000x60000, so decoding it is what must not happen)."""
++        bomb = declared_jpeg(60000, 60000)
++        self.assertLess(len(bomb), 4096)
++        with self.assertRaises(ValueError):
++            Vision.normalize(bomb)
++
++    def test_an_ordinary_jpeg_still_passes_through(self):
++        self.assertEqual(Vision.normalize(declared_jpeg(8, 8)), declared_jpeg(8, 8))
++
++    def test_a_corrupt_jpeg_is_still_left_as_it_was(self):
++        """#1229: a tag that cannot be read must not turn a picture the decoder handles into a 400."""
++        corrupt = b"\xff\xd8\xff" + b"zzz"
++        self.assertFalse(Vision._exif_rotated(corrupt))
++        self.assertEqual(Vision.normalize(corrupt), corrupt)
++
++    def test_a_png_is_still_passthrough_for_now(self):
++        """Documented gap, not a bug fixed here: a PNG (or BMP/GIF) never reaches Pillow in normalize(), so its size is
++        what step 3 point 3 has to check before the bytes go to the decoder."""
++        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
++        self.assertEqual(Vision.normalize(png), png)
++
++    def test_between_the_warning_and_the_error(self):
++        """Pillow warns above 89 MP and refuses above twice that (~179 MP): in between, today, the bytes still go
++        passthrough.  The bound of the server's own comes out of the measurement (D2), which is why this test states the
++        current behavior instead of asserting a number."""
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore")                    # Pillow's DecompressionBombWarning
++            self.assertEqual(Vision.normalize(declared_jpeg(10000, 10000)),
++                             declared_jpeg(10000, 10000))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/terminal/serve/test_image_file_limits.py b/terminal/serve/test_image_file_limits.py
+new file mode 100644
+index 000000000..67b79d94f
+--- /dev/null
++++ b/terminal/serve/test_image_file_limits.py
+@@ -0,0 +1,184 @@
++"""The local image file bound: a picture read from this computer is at most IMAGE_URL_MAX (32 MiB, the same bound as a
++picture read from a URL, `STRATA_MAX_IMAGE_FILE_MIB` changes it), and with "image_dir" in the vision section only files
++inside that directory are read.  Before the bound, a shard or a backup named .png was read whole into the server's
++memory (Path.read_bytes, no size looked at).
++
++    python -m unittest serve.test_image_file_limits -v
++"""
++import http.client
++import json
++import os
++import shutil
++import tempfile
++import time
++import unittest
++from pathlib import Path
++from unittest import mock
++
++from serve.frontend import ChatTemplate
++from serve.server import ByteTokenizer, MockEngine, Service, Vision, image_file_limit, serve
++
++ROOT = Path(__file__).resolve().parent.parent
++
++
++class FileLimits(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.dir = Path(self.tmp.name)
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def sparse(self, name: str, mib: int) -> Path:
++        """A file of `mib` MiB that costs no disk: its bytes are never written (the size is what is checked)."""
++        p = self.dir / name
++        with open(p, "wb") as f:
++            f.truncate(mib << 20)
++        return p
++
++    def test_the_default_bound_is_the_url_bound(self):
++        with mock.patch.dict(os.environ, {}, clear=False):
++            os.environ.pop("STRATA_MAX_IMAGE_FILE_MIB", None)
++            self.assertEqual(image_file_limit(), 32 << 20)
++        with mock.patch.dict(os.environ, {"STRATA_MAX_IMAGE_FILE_MIB": "junk"}):
++            self.assertEqual(image_file_limit(), 32 << 20)
++
++    def test_a_file_over_the_bound_is_refused_before_it_is_read(self):
++        p = self.sparse("big.png", 40)
++        with mock.patch.object(Path, "read_bytes") as read, self.assertRaisesRegex(ValueError, "over 32 MiB"):
++            Vision.load(str(p))
++        read.assert_not_called()
++
++    def test_a_shard_named_png_is_refused_at_once(self):
++        p = self.sparse("shard.png", 400)
++        t0 = time.monotonic()
++        with self.assertRaisesRegex(ValueError, "over 32 MiB"):
++            Vision.load(str(p))
++        self.assertLess(time.monotonic() - t0, 0.5)               # a size is read, not 400 MiB of bytes
++
++    def test_the_bound_can_be_raised_and_lowered(self):
++        p = self.sparse("two.png", 2)
++        with mock.patch.dict(os.environ, {"STRATA_MAX_IMAGE_FILE_MIB": "1"}):
++            with self.assertRaisesRegex(ValueError, "over 1 MiB"):
++                Vision.load(str(p))
++        with mock.patch.dict(os.environ, {"STRATA_MAX_IMAGE_FILE_MIB": "4"}):
++            self.assertEqual(len(Vision.load(str(p))), 2 << 20)
++
++    def test_image_dir_is_the_only_root_when_it_is_set(self):
++        inside = self.dir / "inside"
++        inside.mkdir()
++        ok = inside / "x.png"
++        ok.write_bytes(b"\x89PNG\r\n\x1a\n")
++        outside = self.dir / "y.png"
++        outside.write_bytes(b"x")
++        root = os.path.realpath(inside)
++        self.assertEqual(Vision.load(str(ok), root), b"\x89PNG\r\n\x1a\n")
++        with self.assertRaisesRegex(ValueError, 'outside "image_dir"'):
++            Vision.load(str(outside), root)
++        with self.assertRaisesRegex(ValueError, 'outside "image_dir"'):     # ".." is resolved first
++            Vision.load(str(inside / ".." / "y.png"), root)
++
++    def test_a_link_that_leaves_the_root_is_refused(self):
++        inside = self.dir / "inside"
++        inside.mkdir()
++        secret = self.dir / "secret.png"
++        secret.write_bytes(b"x")
++        link = inside / "link.png"
++        link.symlink_to(secret)
++        with self.assertRaisesRegex(ValueError, 'outside "image_dir"'):
++            Vision.load(str(link), os.path.realpath(inside))
++
++    def test_without_image_dir_a_readable_file_is_read_as_before(self):
++        p = self.dir / "x.png"
++        p.write_bytes(b"\x89PNG\r\n\x1a\n")
++        self.assertEqual(Vision.load(str(p)), b"\x89PNG\r\n\x1a\n")
++
++    def test_the_vision_section_puts_the_root_where_encode_reads_it(self):
++        cfg = {"exe": "x", "mmproj": "m", "model": "w", "image_dir": str(self.dir)}
++        v = Vision(cfg, lazy=True)
++        try:
++            self.assertEqual(v.image_dir, os.path.realpath(self.dir))
++        finally:
++            v.shutdown()
++
++    def test_a_missing_image_dir_is_refused_at_startup(self):
++        cfg = {"exe": "x", "mmproj": "m", "model": "w", "image_dir": str(self.dir / "nope")}
++        with self.assertRaisesRegex(RuntimeError, "not a directory"):
++            Vision(cfg, lazy=True)
++
++
++class OverHttp(unittest.TestCase):
++    """The same bound over HTTP: a local path too big or outside "image_dir" is a 400 that says why (not a 500, not a
++    dropped connection), and one inside it still answers."""
++
++    class FakeVision:
++        """encode() is the real check (Vision.load) with no encoder process behind it; what it returns is not read by
++        MockEngine."""
++
++        def __init__(self, root):
++            self.image_dir = root
++            self.dir = Path(tempfile.mkdtemp(prefix="strata-rows-"))
++            self.rows = self.dir / "img.sve"
++            self.rows.write_bytes(b"rows")
++
++        def encode(self, source):
++            Vision.load(source, self.image_dir)
++            return self.rows, 3
++
++    @classmethod
++    def setUpClass(cls):
++        tok = ByteTokenizer()
++        cls.root = Path(tempfile.mkdtemp(prefix="strata-pictures-"))
++        cls.vision = cls.FakeVision(os.path.realpath(cls.root))
++        svc = Service(MockEngine(tok, "hello there", max_context=4096), tok,
++                      ChatTemplate(ROOT / "serve/chat_template.jinja"), vision=cls.vision)
++        cls.httpd = serve(svc, port=0)
++        cls.port = cls.httpd.server_address[1]
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.httpd.shutdown()
++        cls.httpd.server_close()
++        shutil.rmtree(cls.vision.dir, ignore_errors=True)
++        shutil.rmtree(cls.root, ignore_errors=True)
++
++    def ask(self, path: Path):
++        body = json.dumps({"messages": [{"role": "user", "content": [
++            {"type": "image_url", "image_url": {"url": "file://" + str(path)}}, {"type": "text", "text": "what is it?"}]}],
++            "max_tokens": 4})
++        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
++        try:
++            c.request("POST", "/v1/chat/completions", body, {"Content-Type": "application/json"})
++            r = c.getresponse()
++            return r.status, r.read().decode(errors="replace")
++        finally:
++            c.close()
++
++    def test_a_big_file_is_a_400(self):
++        big = self.root / "big.png"
++        with open(big, "wb") as f:
++            f.truncate(40 << 20)
++        status, out = self.ask(big)
++        self.assertEqual(status, 400, out)
++        self.assertIn("over 32 MiB", out)
++
++    def test_a_file_outside_image_dir_is_a_400(self):
++        outside = Path(tempfile.mkdtemp(prefix="strata-elsewhere-")) / "x.png"
++        outside.write_bytes(b"\x89PNG\r\n\x1a\n")
++        try:
++            status, out = self.ask(outside)
++        finally:
++            shutil.rmtree(outside.parent, ignore_errors=True)
++        self.assertEqual(status, 400, out)
++        self.assertIn("is outside", out)                          # the JSON escapes the quotes of "image_dir"
++        self.assertIn("image_dir", out)
++
++    def test_a_file_inside_image_dir_answers(self):
++        ok = self.root / "x.png"
++        ok.write_bytes(b"\x89PNG\r\n\x1a\n")
++        status, out = self.ask(ok)
++        self.assertEqual(status, 200, out)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/terminal/serve/test_image_ssrf.py b/terminal/serve/test_image_ssrf.py
+new file mode 100644
+index 000000000..6b629eef3
+--- /dev/null
++++ b/terminal/serve/test_image_ssrf.py
+@@ -0,0 +1,166 @@
++"""Image URLs: a URL that points at this PC itself (127.0.0.1, ::1), at a link-local address (169.254.169.254, fe80::),
++at multicast or at the unspecified address is refused before anything connects, and so is every redirect destination
++(a public host that answers 302 with `Location: http://127.0.0.1:8081/status` used to take the server there: the audit's
++third finding).  A LAN address (10/8, 172.16/12, 192.168/16) is allowed on purpose: this is a home server, and a
++picture on another machine of one's own network is a normal thing to send.  The refusal goes to the window; the client
++gets `the image URL could not be read`, unless STRATA_VERBOSE_ERRORS=1.
++
++    python -m unittest serve.test_image_ssrf -v
++"""
++import os
++import threading
++import unittest
++import urllib.error
++import urllib.request
++from unittest import mock
++
++from serve.server import ImageRedirects, UrlRefused, Vision, image_url_allow_internal, image_url_refusal
++
++REFUSED = (
++    "http://127.0.0.1:1/x.png",                          # loopback, IPv4
++    "http://127.0.0.2/x.png",                            # the whole 127/8 is loopback
++    "http://[::1]:8081/x.png",                           # loopback, IPv6
++    "http://localhost:1/x.png",                          # the name of the loopback address
++    "http://169.254.169.254/latest/meta-data/",          # link-local (the cloud metadata address)
++    "http://[fe80::1]/x.png",                            # link-local, IPv6
++    "http://224.0.0.1/x.png",                            # multicast
++    "http://0.0.0.0/x.png",                              # unspecified
++)
++
++ALLOWED = (
++    "http://192.168.0.35:8081/status",                   # this server's own LAN address: allowed on purpose
++    "http://10.0.0.5/x.png",
++    "http://172.16.9.9/x.png",
++    "http://1.1.1.1/x.png",
++)
++
++
++class Refusal(unittest.TestCase):
++    def test_internal_urls_are_refused(self):
++        for url in REFUSED:
++            with self.subTest(url=url):
++                self.assertIsNotNone(image_url_refusal(url))
++
++    def test_lan_urls_are_allowed(self):
++        for url in ALLOWED:
++            with self.subTest(url=url):
++                self.assertIsNone(image_url_refusal(url))
++
++    def test_a_name_that_resolves_to_loopback_is_refused(self):
++        """Through getaddrinfo, not through the spelling: a name (or a decimal address) that answers 127.0.0.1 is the
++        same thing as 127.0.0.1."""
++        for url in ("http://2130706433/x.png", "http://127.1/x.png"):
++            with self.subTest(url=url):
++                self.assertIsNotNone(image_url_refusal(url))
++
++    def test_the_switch_allows_the_pc_itself(self):
++        for url in ("http://127.0.0.1:1/x.png", "http://[::1]/x.png", "http://169.254.169.254/x.png"):
++            with self.subTest(url=url):
++                self.assertIsNone(image_url_refusal(url, allow_internal=True))
++        self.assertIsNotNone(image_url_refusal("http://224.0.0.1/x.png", allow_internal=True))
++
++    def test_the_switch_is_the_environment_variable(self):
++        with mock.patch.dict(os.environ, {}, clear=False):
++            os.environ.pop("STRATA_IMAGE_URL_ALLOW_INTERNAL", None)
++            self.assertFalse(image_url_allow_internal())
++        for value, expected in (("1", True), ("true", True), ("yes", True), ("0", False), ("", False)):
++            with self.subTest(value=value), mock.patch.dict(os.environ, {"STRATA_IMAGE_URL_ALLOW_INTERNAL": value}):
++                self.assertEqual(image_url_allow_internal(), expected)
++
++    def test_a_url_without_a_host_is_refused(self):
++        self.assertIsNotNone(image_url_refusal("http:///x.png"))
++
++    def test_a_host_that_does_not_resolve_is_refused(self):
++        import socket
++        with mock.patch("serve.server.socket.getaddrinfo", side_effect=socket.gaierror("no such host")):
++            self.assertIsNotNone(image_url_refusal("http://no-such-host.invalid/x.png"))
++
++
++class Redirects(unittest.TestCase):
++    def test_a_redirect_to_loopback_is_refused(self):
++        handler = ImageRedirects()
++        with self.assertRaises(UrlRefused):
++            handler.redirect_request(urllib.request.Request("http://example.com/x.png"), None, 302, "Found", {},
++                                     "http://127.0.0.1:8081/status")
++
++    def test_a_redirect_to_a_lan_address_is_allowed(self):
++        handler = ImageRedirects()
++        out = handler.redirect_request(urllib.request.Request("http://example.com/x.png"), None, 302, "Found", {},
++                                       "http://10.0.0.5/x.png")
++        self.assertIsNotNone(out)
++
++    def test_at_most_three_hops(self):
++        self.assertEqual(ImageRedirects.max_redirections, 3)
++
++
++class OverHttp(unittest.TestCase):
++    """The refusal as the client sees it: one sentence (no port, no errno), the reason only in the window, and 400."""
++
++    def server(self, to: str = ""):
++        """A tiny HTTP server of its own on 127.0.0.1 (so the tests turn the switch on): /img is a picture, /hop is a
++        redirect to `to`, /loopN redirects to /loopN+1 for ever."""
++        import http.server
++
++        class Files(http.server.BaseHTTPRequestHandler):
++            def log_message(self, *a):
++                pass
++
++            def do_GET(self):
++                if self.path == "/hop" and to:
++                    self.send_response(302)
++                    self.send_header("Location", to)
++                    self.end_headers()
++                    return
++                if self.path.startswith("/loop"):
++                    n = int(self.path[len("/loop"):] or "0")
++                    self.send_response(302)
++                    self.send_header("Location", f"/loop{n + 1}")
++                    self.end_headers()
++                    return
++                body = b"\x89PNG\r\n\x1a\n" + b"x" * 32
++                self.send_response(200)
++                self.send_header("Content-Length", str(len(body)))
++                self.end_headers()
++                self.wfile.write(body)
++
++        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Files)
++        threading.Thread(target=httpd.serve_forever, daemon=True).start()
++        return httpd
++
++    def test_an_internal_url_never_connects(self):
++        with self.assertRaisesRegex(ValueError, "^the image URL could not be read$"):
++            Vision.download("http://127.0.0.1:1/x.png")
++
++    def test_a_refusal_says_why_with_the_switch_on(self):
++        with mock.patch.dict(os.environ, {"STRATA_VERBOSE_ERRORS": "1"}):
++            with self.assertRaisesRegex(ValueError, "STRATA_IMAGE_URL_ALLOW_INTERNAL=1 allows it"):
++                Vision.download("http://127.0.0.1:1/x.png")
++
++    def test_the_switch_lets_a_local_server_be_read(self):
++        httpd = self.server("")
++        try:
++            base = f"http://127.0.0.1:{httpd.server_address[1]}"
++            with mock.patch.dict(os.environ, {"STRATA_IMAGE_URL_ALLOW_INTERNAL": "1"}):
++                self.assertTrue(Vision.download(base + "/img").startswith(b"\x89PNG"))
++                with mock.patch.dict(os.environ, {}, clear=False):     # and off again, the same URL is refused
++                    os.environ.pop("STRATA_IMAGE_URL_ALLOW_INTERNAL", None)
++                    with self.assertRaisesRegex(ValueError, "^the image URL could not be read$"):
++                        Vision.download(base + "/img")
++        finally:
++            httpd.shutdown()
++            httpd.server_close()
++
++    def test_a_local_server_that_redirects_is_read_and_an_endless_one_is_cut(self):
++        httpd = self.server("")
++        try:
++            base = f"http://127.0.0.1:{httpd.server_address[1]}"
++            with mock.patch.dict(os.environ, {"STRATA_IMAGE_URL_ALLOW_INTERNAL": "1", "STRATA_VERBOSE_ERRORS": "1"}):
++                with self.assertRaisesRegex(ValueError, "could not be read"):
++                    Vision.download(base + "/loop")                    # 3 hops is the limit
++        finally:
++            httpd.shutdown()
++            httpd.server_close()
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/terminal/serve/test_server.py b/terminal/serve/test_server.py
+index 40d70aa38..690a01ccb 100644
+--- a/terminal/serve/test_server.py
++++ b/terminal/serve/test_server.py
+@@ -6250,7 +6250,10 @@ class ImageSources(unittest.TestCase):
+         threading.Thread(target=httpd.serve_forever, daemon=True).start()
+         base = f"http://127.0.0.1:{httpd.server_address[1]}"
+         try:
+-            with mock.patch.object(server, "IMAGE_URL_MAX", 1000):
++            # local hardening: this server refuses internal addresses (SSRF) and shortens error sentences unless
++            # STRATA_VERBOSE_ERRORS=1; this test serves from 127.0.0.1 and checks the reasons
++            with mock.patch.object(server, "IMAGE_URL_MAX", 1000), mock.patch.dict(
++                    os.environ, {"STRATA_IMAGE_URL_ALLOW_INTERNAL": "1", "STRATA_VERBOSE_ERRORS": "1"}):
+                 for q in ("", "?length"):
+                     with self.subTest(q=q):
+                         self.assertEqual(server.Vision.load(base + "/small" + q), b"x" * 100)
+diff --git a/terminal/strata_control/drafting.py b/terminal/strata_control/drafting.py
+index 6a6b9f181..259492612 100644
+--- a/terminal/strata_control/drafting.py
++++ b/terminal/strata_control/drafting.py
+@@ -471,7 +471,11 @@ def tuned_applies(backend: str | None, model_name: str | None, archs: Any = None
+         return True
+     arch = first_arch(archs)
+     if entry.where == "gfx1151":
+-        return arch == "gfx1151"
++        # LOCAL (heredado del espacio hermano, ADR-045 2026-11-16; P2 2026-11-19): the tuned pack is also allowed
++        # on gfx1201 (this box's family: RX 9070 XT). Upstream keeps gfx1201 out for the open DFlash2 prompt
++        # stall; this box has run DFlash2 by name since 0.1.56 with no stall, and the A/B gate was the acceptance
++        # in real traffic (see outbox/ and the changelog there).
++        return arch in ("gfx1151", "gfx1201")
+     if entry.where == "arc_a":
+         return arch == "arc_a"
+     if entry.where == "resident":
+diff --git a/terminal/tests/terminal/test_drafting_tuned.py b/terminal/tests/terminal/test_drafting_tuned.py
+index f1454bc3e..fbac14b6d 100644
+--- a/terminal/tests/terminal/test_drafting_tuned.py
++++ b/terminal/tests/terminal/test_drafting_tuned.py
+@@ -545,7 +545,10 @@ class CudaAndHip(Fetch):
+     def test_a_12_gb_card_an_r9700_sycl_several_cards_and_other_amd_cards_never_get_it(self):
+         self.put_tuned()
+         self.put_stock()
+-        for hardware in (P2003, CARD24, R9700, RX7900, ARC, TWO_CARDS):
++        # LOCAL (P2 2026-11-19, heredado del espacio hermano ADR-045): R9700/gfx1201 is dropped from this list:
++        # tuned_applies allows gfx1201 on this box (see drafting.py); its positive case is covered by
++        # test_fetch_follows_the_rule_and_reads_the_feed_only_when_it_applies below.
++        for hardware in (P2003, CARD24, RX7900, ARC, TWO_CARDS):
+             for name in (IQ3S, Q4, V31, OLD_XS):
+                 if hardware is P2003 and name == V31:
+                     continue                                    # the 12 GB class has its own entry for v31 (test_drafting_streaming_class.py)
+@@ -617,7 +620,9 @@ class CudaAndHip(Fetch):
+ 
+     def test_fetch_follows_the_rule_and_reads_the_feed_only_when_it_applies(self):
+         feed = self.make_feed(sub="all", backends=("metal", "cuda", "hip"))
+-        for hardware, name, fetched in ((L620, IQ3S, True), (SPARK, V31, True), (STRIX, Q4, True), (STRIX, V31, True), (P2003, IQ3S, False), (R9700, IQ3S, False), (ARC, IQ3S, False),
++        # LOCAL (P2 2026-11-19, ADR-045 heredado): R9700/gfx1201 leaves this loop: tuned_applies holds on this box,
++        # which splits the two halves the loop couples; they are checked apart in the block below.
++        for hardware, name, fetched in ((L620, IQ3S, True), (SPARK, V31, True), (STRIX, Q4, True), (STRIX, V31, True), (P2003, IQ3S, False), (ARC, IQ3S, False),
+                                         (TWO_CARDS, IQ3S, False), (L620, Q4, False)):
+             (self.data / "dflash2").mkdir(parents=True, exist_ok=True)
+             for f in (self.data / "dflash2").glob("*strata1*"):
+@@ -633,9 +638,20 @@ class CudaAndHip(Fetch):
+             else:
+                 self.assertEqual(got, Path("/stock"), where)
+                 self.assertFalse(drafting.tuned_path(self.data).exists(), where)
++        # LOCAL (P2 2026-11-19, ADR-045 heredado): on this box tuned_applies also holds for gfx1201. Auto still
++        # picks the MTP for IQ3_S there (no SET_DEFAULTS entry says dflash2; production runs it by name), so
++        # needs_tuned stays False - but ensure_for follows tuned_applies and takes the tuned pack from the feed.
++        (self.data / "dflash2").mkdir(parents=True, exist_ok=True)
++        for f in (self.data / "dflash2").glob("*strata1*"):
++            f.unlink()
++        self.assertFalse(drafting.needs_tuned("auto", model_name=IQ3S, backend="hip", archs=["gfx1201"], data_dir=self.data, args=self.args, vram_mib=32768))
++        with mock.patch.object(drafting_fetch, "ensure", return_value=Path("/stock")) as stock:
++            got = drafting_fetch.ensure_for(self.data, model_name=IQ3S, backend="hip", feed=str(feed), archs=["gfx1201"], args=self.args, vram_mib=32768)
++        self.assertEqual(got, drafting.tuned_path(self.data))
++        stock.assert_not_called()
+         for name in (IQ3S, Q4):                                    # the feed was never read for the ones that do not qualify
+             with mock.patch.object(drafting_fetch, "tuned_from_feed", side_effect=AssertionError("feed read")), mock.patch.object(drafting_fetch, "ensure", return_value=Path("/stock")):
+-                for hardware in (P2003, R9700, ARC, TWO_CARDS):
++                for hardware in (P2003, ARC, TWO_CARDS):           # LOCAL: R9700 dropped, its feed IS read (tuned_applies holds)
+                     drafting_fetch.ensure_for(self.data, model_name=name, backend=hardware[1], archs=hardware[2], args=self.args, vram_mib=hardware[3])
+ 
+     def test_a_feed_that_lists_only_metal_gives_cuda_and_hip_the_stock_drafter(self):
+@@ -663,7 +679,8 @@ class CudaAndHip(Fetch):
+         self.assertEqual(drafting_fetch.plan(self.data, model_name=IQ3S, backend="cuda", archs=["sm_121"], args=self.args)["gb"], drafting.TUNED_GB)
+         self.assertEqual(drafting_fetch.plan(self.data, model_name=Q4, backend="hip", archs=["gfx1151"], args=self.args)["gb"], drafting.TUNED_GB)
+         self.assertEqual(drafting_fetch.plan(self.data, model_name=IQ3S, backend="cuda", archs=["sm_86"], args=self.args, vram_mib=12288)["gb"], drafting.DOWNLOAD_GB)
+-        self.assertEqual(drafting_fetch.plan(self.data, model_name=IQ3S, backend="hip", archs=["gfx1201"], args=self.args, vram_mib=32768)["gb"], drafting.DOWNLOAD_GB)
++        # LOCAL (P2 2026-11-19): gfx1201 gets the tuned pack on this box, so the plan announces its download.
++        self.assertEqual(drafting_fetch.plan(self.data, model_name=IQ3S, backend="hip", archs=["gfx1201"], args=self.args, vram_mib=32768)["gb"], drafting.TUNED_GB)
+ 
+     def test_the_card_memory_read(self):
+         class Reader:

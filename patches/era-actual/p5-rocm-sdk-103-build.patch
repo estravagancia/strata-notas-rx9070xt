@@ -1,0 +1,62 @@
+From c0c546c4987b7be5e459cd918321dcfd37515876 Mon Sep 17 00:00:00 2001
+From: estravagancia <estravagancia@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 11:49:30 +0000
+Subject: [PATCH] P5: toolchain ROCm 10.3 del bundle (rocm-sdk devel)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- hip_backend.cmake: propagar '-x hip' solo en compilación; con los paquetes
+  rocm-sdk, hip::device ya no lo lleva a los consumidores y los .cu forzados a
+  LANGUAGE HIP se compilaban como CUDA ('unsupported CUDA gpu architecture').
+- conversation_snapshot_test.cpp: el port P1 declaraba SessionReadLimits limits
+  dos veces en el mismo ámbito (defecto real; el test nunca compiló). Segundo
+  bloque renombrado a rlimits, semántica original intacta.
+
+Build: cmake -S engine con CMAKE_HIP_COMPILER del SDK + isystem para no mezclar
+headers apt de /usr/include. Gates: mmvq_il_parity OK bitwise; suite CacheKV sin
+regresión frente a .90 en la misma caja (mismos fallos ambientales por GPU ocupada).
+---
+ engine/cmake/hip_backend.cmake                 | 5 +++++
+ engine/src/core/conversation_snapshot_test.cpp | 8 ++++----
+ 2 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/engine/cmake/hip_backend.cmake b/engine/cmake/hip_backend.cmake
+index 966fa21d0..ece9af930 100644
+--- a/engine/cmake/hip_backend.cmake
++++ b/engine/cmake/hip_backend.cmake
+@@ -56,6 +56,11 @@ foreach(_cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+   endif()
+ endforeach()
+ find_package(hip CONFIG REQUIRED)
++# Local divergence (P5, rocm-sdk toolchain): with the rocm-sdk 10.3 packages, hip::device no longer carries
++# '-x hip' into consumers, so .cu sources forced to LANGUAGE HIP compile as CUDA ('unsupported CUDA gpu
++# architecture: gfx1200'). Compile-only genex; link commands stay untouched.
++add_compile_options($<$<COMPILE_LANGUAGE:HIP>:-x>)
++add_compile_options($<$<COMPILE_LANGUAGE:HIP>:hip>)
+ find_package(hipblas CONFIG REQUIRED)
+ # Older distro hipBLAS has no workspace API. The compatibility shim uses
+ # rocBLAS directly for that version; newer hipBLAS keeps its existing path.
+diff --git a/engine/src/core/conversation_snapshot_test.cpp b/engine/src/core/conversation_snapshot_test.cpp
+index c2689bd2e..fe16f1db3 100644
+--- a/engine/src/core/conversation_snapshot_test.cpp
++++ b/engine/src/core/conversation_snapshot_test.cpp
+@@ -208,11 +208,11 @@ void full_session(int fmt, int mode, int experts) {
+         check(snap_save(checked,view,ss,g,nullptr,err) && checked.live.gdn==no_draft.live.gdn &&
+               checked.live.dead==no_draft.live.dead && equal(checked.kv[0],no_draft.kv[0]),"no-MTP disk round trip exact");
+         check(conversation_snapshot_restore(b,ss,g,draft.state,err)==ConversationRestore::restored,"restore original fixture after no-MTP disk check");
+-        SessionReadLimits limits;
+-        limits.stream_kv = true;
+-        check(conversation_session_read_limits(limits,ss,g,draft.state,96,1,err), "bounded file read limits");
++        SessionReadLimits rlimits;
++        rlimits.stream_kv = true;
++        check(conversation_session_read_limits(rlimits,ss,g,draft.state,96,1,err), "bounded file read limits");
+         SavedConversation streamed;
+-        check(session_file_read(p1,id,streamed,n1,err,limits), "bounded disk read");
++        check(session_file_read(p1,id,streamed,n1,err,rlimits), "bounded disk read");
+         check(conversation_snapshot_validate(streamed,ss,g,draft.state,err), "validate bounded disk snapshot");
+         fill(13);
+         check(conversation_snapshot_restore(streamed,ss,g,draft.state,err)==ConversationRestore::restored,
+-- 
+2.53.0
+

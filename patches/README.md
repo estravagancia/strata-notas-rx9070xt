@@ -1,19 +1,27 @@
-# Parches
+# Parches propios, separados por era
 
-Ninguno está enviado a Strata (última actualización del estado: 27-10-2026). Los C1/C2 tienen el texto del PR
-en inglés ya redactado; la decisión de enviarlos es pendiente. El del CacheKV **no es
-nuestro**: es el parche de un fork ajeno (kinoyu-ai), aquí solo registrado en la forma en
-que lo aplicamos sobre una etiqueta concreta.
+| carpeta | contenido |
+|---|---|
+| [`era-anterior/`](era-anterior/) | los 6 ficheros de la época 0.1.49–0.1.57.x (incluido el parche CacheKV del fork ajeno kinoyu-ai, que sigue vivo en los motores nuevos) con su tabla de estado |
+| [`era-actual/`](era-actual/) | las 5 divergencias sobre la base v0.2.16 con las que se construyen los motores `0.1.62.9x` |
 
-| Fichero | Qué hace | ¿Aplicado aquí? |
+Contexto del corte: [CAMBIO-DE-ERA.md](../CAMBIO-DE-ERA.md).
+
+## era-actual/ — divergencias sobre v0.2.16
+
+Ninguna está enviada a Strata (el clon donde se desarrollan tiene el upstream de solo
+lectura). CacheKV e IL-mmvq no están aquí como parche: forman parte del commit base del
+motor (`4a7d49cb9`); lo que sí va como parche suelto es lo que hubo que tocar para poder
+portarlos y compilarlos.
+
+| Fichero | Qué hace | Estado |
 |---|---|---|
-| `C1-hipblaslt-lookup-familia-hermana.patch` | Que la búsqueda de tabla de ajuste caiga a la de la arquitectura hermana (gfx1200↔gfx1201, gfx1100/1101/1102). Base: tag v0.2.3 | No aplicado (queda en el banco de pruebas de la caja; el motor oficial 0.1.50 no lo trae) |
-| `C2-tabla-gfx1200-hipblaslt-100200-67filas.patch` | Tabla de 67 filas recalibrada en RX 9070 XT + doc (el texto del doc procede de `AMD_HIP.md` de upstream, tags v0.2.3/v0.2.4; la tabla es medida en esta caja). Base: v0.2.3 | La tabla sí se usa (en `tools/hip/` del clon); el commit no está subido |
-| `C6-borrador-popcount-iq_avx512.patch` | Popcount en los expertos IQ3 (Zen 5). Base: v0.2.4 | Compilado y medido: **−1,5 % chat → no adoptado** (bandera apagada) |
-| `C5-borrador-vram-elastic-hip.md` | apuntes del port HIP de `--vram-elastic` (ceder VRAM a otro programa entre requests) | No portado: sin uso local para eso |
-| `CacheKV-fork-kinoyu-sobre-v0.2.11.patch` | El parche CacheKV del fork [kinoyu-ai/Strata-CacheKV-kinoyu](https://github.com/kinoyu-ai/Strata-CacheKV-kinoyu) (KV de conversación en disco que sobrevive a reinicios), tal como lo aplicamos: diff único sobre la etiqueta v0.2.11 | **Sí, en producción desde 12-11** (motor propio `0.1.57.90`, ver [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §10) |
-| `endurecimiento-server-v0.1.45.patch` | Endurecimiento del servidor Python (cabeceras/backlog/imágenes). Diff sobre el clon v0.1.45 | **Sí, en producción desde 19-10** |
+| `p1-hip-gate-y-shim-l2.patch` | extiende a HIP el control de paridad IL (upstream solo lo ejecuta en CUDA) y quita un guard de AMD al shim de nivel 2 | aplicado; es lo que permite verificar la paridad bit a bit del porteo IL en esta tarjeta |
+| `p1-sink-try-catch.patch` | protege con try/catch el punto de salida del servidor, para que un fallo no tumbe el proceso | aplicado |
+| `p1-dedupe-snapshot-sources.patch` | quita una lectura duplicada en las pruebas de instantánea de conversación (ese test no compilaba en ningún build) | aplicado |
+| `serve-local-hardening-v0.2.16.patch` | endurecimiento del servidor con imágenes: respuesta neutra y razón legible ante peticiones inválidas, y control de la arquitectura gfx1201 | aplicado y verificado en vivo el 19-11 (puerto de visión) |
+| `p5-rocm-sdk-103-build.patch` | hace posible compilar con el SDK ROCm 10.3: los paquetes nuevos no propagan el flag de compilación HIP y sin él los `.cu` se compilaban como CUDA | aplicado; es la base del motor en producción (`0.1.62.91`) |
 
-Evidencia medida de C1/C2 (motor 0.1.47, 21-10): prefill 4K +1,2 %, 16K +2,0 % — con la
-advertencia de que los dos runs usaron contexto distinto (100.000 vs 105.000); el
-detalle, en `RESULTADOS.md`.
+Los tres primeros son fixes de compilación del porte (P1); el cuarto es el endurecimiento
+que ya existía en la era anterior, re-portado al servidor nuevo; el quinto pertenece al
+cambio de compilador (P5).
