@@ -4,6 +4,55 @@ Cronología real de esta caja. Cada paso dice qué se hizo y qué salió. Las ve
 "0.1.4x" son versiones del **motor** de Strata; "v0.2.x" son los lanzamientos de Strata
 (de donde salen los códigos que compilamos).
 
+Este fichero tiene dos bloques: la **era actual** arriba y debajo el **Histórico** de la era
+anterior (18-10 → 17-11), tal como se publicó. El contexto completo del corte está en
+[CAMBIO-DE-ERA.md](CAMBIO-DE-ERA.md).
+
+# ERA ACTUAL — clon v0.2.16, motores 0.1.62.9x (desde el 17-11)
+
+## 17-11 — Dos decisiones que prepararon el corte
+
+En el espacio anterior: (a) el gate del motor `0.1.61.90` (base v0.2.15 **sin** IL-mmvq)
+fallo contra nuestro `0.1.57.91` (−1,35 %/−3,85 % en chat; allí T33/ADR-047), de donde quedó
+la regla de no probar ninguna base sin el IL portado; (b) se adoptó `0.1.57.91` —v0.2.11 +
+CacheKV + IL-mmvq— como último motor de la línea vieja (allí ADR-046). Y v0.2.16 reestructuró
+el proyecto upstream (`app/`, `engine/`, `terminal/`): el espejo de serve y documentación que
+manteníamos dejó de tener rutas donde aplicarse, y el ciclo se cerró sin hacer el porte
+(allí ADR-048).
+
+## 18-11 — Clon nuevo y primer motor propio de la era (0.1.62.90)
+
+Decisión del usuario: crear un clon limpio anclado al tag **v0.2.16** (`~/Strata-upstream`),
+sin tocar el checkout viejo; comparten datos y carpeta de motores, no historias (allí ADR-U01).
+Sobre esa base se reaplicó lo propio que sigue haciendo falta: CacheKV del fork kinoyu-ai y
+el porteo de IL-mmvq a la ruta HIP — para esto hubo que abrir las familias de kernels a HIP y
+traer las celdas IQ3 de las tablas gfx12, y extender a HIP el control de paridad IL (que
+upstream solo ejecuta en CUDA). Con el ROCm del sistema (apt 7.2.1) compiló el primer motor:
+**`0.1.62.90`**, adoptado en producción el mismo día. Receta: `scripts/0.1.62.9x/install-016290.sh`.
+
+## 19-11 — Segundo compilador (0.1.62.91) y serie de validación
+
+Los paquetes del **SDK ROCm 10.3** no propagaban el flag de compilación HIP (los `.cu` se
+compilaban como CUDA); con el parche `p5-rocm-sdk-103-build.patch` compiló **`0.1.62.91`**:
+el mismo commit, otro compilador (receta: `install-016291.sh`). Serie de bench para comparar
+los dos (chunk 16.384 forzado): paridad bit a bit del IL entre ambos motores y sin caída
+sistemática; decisión de quedarse con el `.91` —el entorno real de la caja ya era ROCm 10.3—
+conservando el `.90` como vuelta atrás (allí ADR-U02). Tablas en [RESULTADOS.md](RESULTADOS.md),
+serie del 19-11. También ese día cambiaron decisiones de uso ajenas al motor: servir en la red
+local, muestreo explícito (temperature 0,7) y el pack del borrador a `strata1.q4_0-selq4`.
+
+## 20-11 — Este repositorio se separa por eras
+
+Los textos abren con la era actual y conservan abajo lo publicado hasta el 17-11; los
+artefactos pasan a subcarpetas por era (`configs/`, `scripts/`, `patches/`, `benches/`) y se
+publican las 5 muestras del 19-11. El documento puente es [CAMBIO-DE-ERA.md](CAMBIO-DE-ERA.md).
+
+---
+
+# HISTÓRICO — era 0.1.57.x (cronología 18-10 → 17-11)
+
+Lo que sigue es la cronología de la era anterior, tal como se publicó.
+
 ## 18-10 — Primera instalación
 
 Clon del repositorio [Niko1221/Strata](https://github.com/Niko1221/Strata) (rama main,
@@ -15,7 +64,7 @@ para la tarjeta (10-20 minutos, una vez). Primer motor: **0.1.45.3** compilado e
 ## 19-10 — Endurecimiento de seguridad
 
 Revisión del servidor Python (`serve/server.py`) y tres refuerzos, en
-`patches/endurecimiento-server-v0.1.45.patch`:
+`patches/era-anterior/endurecimiento-server-v0.1.45.patch`:
 
 - **tiempo de lectura de cabeceras** (15 s): una conexión que abre y no dice nada ya no
   puede secuestrar un hilo del servidor para siempre. `STRATA_REQUEST_HEADERS_S` lo ajusta.
@@ -50,7 +99,7 @@ el motor rechace la tabla.
 Con los benches "en caliente" (con otros programas usando el PC) las diferencias de ±3 %
 eran puro ruido. A partir de aquí toda decisión usa un protocolo fijo:
 
-- Servidor de producción y todo lo demás **parados**; el script `scripts/run-bench.sh`
+- Servidor de producción y todo lo demás **parados**; el script `scripts/0.1.57.x/run-bench.sh`
   (saneado) arranca el motor con la config de producción y lanza 2 ejecuciones completas:
   la primera es calentamiento, **la segunda es la válida**.
 - Cada ejecución guarda su propio `server.log`: si se coló algo ajeno, se detecta y se repite.
@@ -151,7 +200,7 @@ chat mediano **81,2 vs 77,0 (+5,5 %)**, 4K y 16K planos. Los rangos son anchos
 (69,4-126,2 del drafter frente a 71,2-97,7 del control): la mediana mejora y la
 varianza del borrador se nota. Se adoptó: la config de producción usa `--draft dflash2`,
 `--draft-fallback none` y `--draft-conf 0.7`. Muestras:
-`benches/muestras/mtp-0.1.56-control` y `df2-0.1.56-draft`.
+`benches/0.1.57.x/muestras/mtp-0.1.56-control` y `df2-0.1.56-draft`.
 
 ## 05-11 — Motor 0.1.57: anillo de preparación de prompt más profundo (+10,7 % en 4K)
 
@@ -161,7 +210,7 @@ El 0.1.57 profundiza el anillo de preparación de prompt de gfx12 (`STRATA_GFX12
 **4K 2.322,6 vs 2.098,0 (+10,7 %)**, 16K y 32K
 dentro del ruido (±0,2 %); chat 82,2 vs 79,3. Se adoptó. Desde ese día el script de
 medida añade el prompt de 32K (`--long`): **3.055,5 tok/s, 10,5 s hasta el primer
-token**. Muestras: `benches/muestras/engine-0.1.57-ring0` y `engine-0.1.57-anillo`.
+token**. Muestras: `benches/0.1.57.x/muestras/engine-0.1.57-ring0` y `engine-0.1.57-anillo`.
 
 ## 12-11 — Producción en IQ3_S y el KV en disco que sobrevive a los reinicios
 
@@ -169,12 +218,12 @@ Dos cosas el mismo día. Primero cerramos el A/B de modelo (IQ3_S frente a IQ3_X
 **chat −5,5 % y agente −5,3 %** a cambio de **+3,2 pp** de tokens conocidos, con el techo
 de pérdida fijado en −20 % de antemano → **IQ3_S pasa a producción** (contexto 94.000,
 sin visión; IQ3_XXS queda como alternativa para contexto largo). Sus dos primeras ejecuciones
-auditadas son las primeras sobre IQ3_S: `benches/muestras/cachekv-0.1.57-ctrl-iq3s` y
+auditadas son las primeras sobre IQ3_S: `benches/0.1.57.x/muestras/cachekv-0.1.57-ctrl-iq3s` y
 `cachekv-0.1.57.90-iq3s`.
 
 Segundo: un fork ajeno, **kinoyu-ai/Strata-CacheKV-kinoyu**, añade un nivel de disco al
 caché de conversación que **sobrevive al reinicio** del motor. Lo aplicamos sobre la
-etiqueta v0.2.11 (diff en `patches/CacheKV-fork-kinoyu-sobre-v0.2.11.patch`, autor
+etiqueta v0.2.11 (diff en `patches/era-anterior/CacheKV-fork-kinoyu-sobre-v0.2.11.patch`, autor
 original kinoyu-ai) y lo compilamos con el script del propio tag → motor propio
 **`0.1.57.90`** (~6 min; el binario se declara `0.1.57`, ver §10 de
 [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md)).
@@ -182,7 +231,7 @@ original kinoyu-ai) y lo compilamos con el script del propio tag → motor propi
 Aquí llegó el problema metodológico: **el A/B estándar no ve nada**. Las dos parejas
 quedan planas (4K −0,2 %, 16K +0,1 %, chat y agente dentro del rango), porque el parche no
 afecta al camino caliente: lo que hace es cobrar el prefill ya pagado. Hubo que inventar un
-protocolo (`scripts/kv-persist-test.sh`: arrancar → conversación larga → apagado normal →
+protocolo (`scripts/0.1.57.x/kv-persist-test.sh`: arrancar → conversación larga → apagado normal →
 segundo arranque → el mismo prompt): **0 reused + 29.347 read en 8.662 ms** frente a
 **29.340 reused + 7 read en 634 ms → −92,7 %**. En la sesión real más larga que teníamos
 abierta, `restored 41612 tokens in 191.6 ms` y el primer request en 894 ms. Aprobado con
@@ -217,7 +266,7 @@ Quedaba pendiente la relectura de 32.000 tokens en la config actual: la pareja d
 no usó `--long`. Lanzamos una ejecución suelta en frío con la misma config de producción
 (puerto de banco aparte, la producción intacta): **3.161 tok/s y 10,17 s hasta el primer
 token** en la mediana, ~3,4 % por encima del 3.055,5 de la era IQ3_XXS. Muestra en
-`benches/muestras/long-0.1.57.90-iq3s/`.
+`benches/0.1.57.x/muestras/long-0.1.57.90-iq3s/`.
 
 El matiz, que casi nos pasa desapercibido: en esa ejecución quedaban ~8,8 GiB libres de RAM
 al arrancar (en la del 12-11, ~9,8), y el motor adaptó solo el chunk de prompt de 16.384
@@ -240,7 +289,7 @@ Resultado: **~1 % en la media del chat** (88,1 vs 89,1; las medianas quedan dent
 ruido) y **1,4–2,9 % en el agente**; el coste se ve en el log como 79 escrituras de espejo
 de 120-140 ms al cerrar respuestas. Decisión: **se mantiene el disco**, con el coste medido
 y conocido — es una prima de seguro contra el prefill tras cada reinicio. Muestras:
-`benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/` y su control sin disco. Tabla en
+`benches/0.1.57.x/muestras/cachekv-0.1.57.90-disk-16384-iq3s/` y su control sin disco. Tabla en
 [RESULTADOS.md](RESULTADOS.md).
 
 ## 15-11 — Gate del motor 0.1.60: fallado; barrido de `--draft-conf`: se queda 0,7
@@ -249,7 +298,7 @@ Instalamos el motor 0.1.60 de la release v0.2.14 y corrimos su gate contra el co
 disco del 14-11 (misma config, solo motor nuevo). Falló: agente **+5,28 %** más lento, 16K
 **+1,37 %**, 32K **+9,36 %** en decodificación (chat +0,78 %, dentro del gate de ±1,5).
 Cerrado como *instalar sin usar*: producción intacta en 0.1.57.90. Muestra:
-`benches/muestras/engine-0.1.60-iq3s/`.
+`benches/0.1.57.x/muestras/engine-0.1.60-iq3s/`.
 
 La misma noche, barrido del umbral de aceptación de borradores: 0,55 → chat **+1,85 %** más
 lento (68,3 % de borradores aceptados); 0,85 → **+3,01 %** más lento pese a 87,8 %. Los dos
@@ -266,11 +315,11 @@ borradores aceptados **+1,7 puntos** (79,1 %), pero chat −1,7 % y agente −2,
 al control del 14-11. Todos los brazos del día comparten el vocab nuevo y el control es de
 otro día: **la atribución no es separable**; se adopta con la duda declarada. Control vigente
 desde entonces: `2026-11-16-1502-ctrl-nuevo-vocab-chunk16384-iq3-s`. Muestra:
-`benches/muestras/vocab-es-nuevo-0.1.57.90-iq3s/`.
+`benches/0.1.57.x/muestras/vocab-es-nuevo-0.1.57.90-iq3s/`.
 
 `STRATA_SPEC_ADAPT_EVERY`/`_WARM` (adaptación del borrador en vivo): dos parejas
 independientes el mismo día dieron signos invertidos entre pasadas — firma de ruido. Lever
-cerrado. Muestra: `benches/muestras/specadapt-0.1.57.90-iq3s/`.
+cerrado. Muestra: `benches/0.1.57.x/muestras/specadapt-0.1.57.90-iq3s/`.
 
 Y otra lección de RAM: la pareja de las 14:37/14:48 no alcanzó chunk 16.384 pese a la ventana
 cerrada (quedaban ~57,8 GiB disponibles y al guard le faltaban ~2,7 GiB; el motor bajó solo a

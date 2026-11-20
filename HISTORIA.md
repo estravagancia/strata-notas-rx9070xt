@@ -1,6 +1,6 @@
 # Historia de una caja
 
-*(Desde el 20 de octubre hasta 17 de noviembre de 2026) convirtiendo un PC de casa
+*(Desde el 20 de octubre hasta 19 de noviembre de 2026) convirtiendo un PC de casa
 en un servidor de inteligencia artificial. Lo que se hizo, qué se logró y qué se aprendió.
 Sin tecnicismos: los números concretos están en [RESULTADOS.md](RESULTADOS.md).*
 
@@ -190,7 +190,7 @@ probamos también a mover la sensibilidad con la que el borrador se acepta (más
 estricta); las dos variantes fueron peores que el valor de siempre. De aquella noche quedó
 otra regla más mundana y muy útil: una de las primeras parejas de medidas quedó inservible
 porque la ventana de producción estaba ocupando memoria — **hay que cerrarla antes de cada
-prueba de banco**. Muestras: [benches/muestras/](benches/muestras/).
+prueba de banco**. Muestras: [benches/0.1.57.x/muestras/](benches/0.1.57.x/muestras/).
 
 ### 16 de noviembre · Un diccionario nuevo para los borradores, y una palanca que no movió nada
 
@@ -207,11 +207,44 @@ bajó solo su tamaño de lectura por falta de memoria libre, pese a la ventana c
 repetimos con la máquina más limpia y esa sí fue válida. Las muestras publicadas son las de la
 repetición limpia.
 
+### 17–19 de noviembre · El cambio de era
+
+Estos tres días cambiaron la forma de trabajar más que ninguna mejora concreta, así que van
+en su propio capítulo (el detalle técnico y las cifras, en [CAMBIO-DE-ERA.md](CAMBIO-DE-ERA.md)).
+
+Hasta ahora seguíamos el proyecto actualizando una copia vieja: su servidor y sus documentos
+se mantenían como espejo de la última versión oficial y encima volvía a aplicar nuestros
+arreglos. El 17 llegó una versión oficial que reorganizó todo el proyecto por dentro, y el
+espejo dejó de tener dónde mirarse: las carpetas que copiábamos ya no existían con esos
+nombres. Al mismo tiempo habíamos medido que las versiones nuevas "en crudo" iban más lentas
+que nuestra copia arreglada —le faltaba un truco de aceleración que solo tenemos nosotros—,
+y el 18 probamos a cerrar el ciclo en el sitio viejo y desistimos: mezclar dos historias de
+medidas distintas en un mismo sitio era peor el remedio.
+
+La solución fue limpia y aburrida: una copia nueva y ordenada de la versión oficial más
+reciente, y llevar encima solo lo nuestro que sigue haciendo falta —la red de seguridad que
+mantiene viva la conversación al reiniciar el PC y el truco de aceleración que faltaba. Con
+eso compilamos un motor nuevo y lo pusimos a funcionar el mismo 18. El 19 repetimos la
+compilación con un compilador más moderno —el que esta caja ya usaba por dentro—, medimos el
+uno contra el otro con el mismo protocolo de siempre, y no encontramos ninguna caída clara:
+alguna escritura algo más rápida, resultados desiguales en tareas de agente (aquí no
+afirmamos por qué, con una sola pareja de medidas). Nos quedamos con el moderno y guardamos
+el otro como recambio, que se cambia con una línea. También ese día la caja dejó de atender
+solo a sí misma y pasó a compartir el modelo con el resto de la casa, y el borrador cambió de
+vocabulario: cosas de uso, no del motor.
+
+Lo importante para leer estas notas: a partir del 18 hay **dos eras documentadas por separado**
+—la anterior (del 18-10 al 17-11) y la actual—, con sus carpetas y sus tablas propias. No hay
+que comparar cifras de una era con la otra: son motores distintos sobre bases distintas.
+
 ## Qué se logró, en números comprensibles
 
 Estos son los números publicados por esta misma caja, actualizados con la ejecución de
 producción auditada del **14 de noviembre de 2026** (modelo IQ3_S; cada escalón intermedio
-sigue medido con su fecha). Para quien no conozca la unidad: un token es aproximadamente
+sigue medido con su fecha). **Pertenecen a la era anterior** (motor 0.1.57.90): la era actual
+tiene sus propias tablas en [RESULTADOS.md](RESULTADOS.md), y aún no hay una ejecución de
+producción auditada con su configuración definitiva. Para quien no conozca la unidad: un
+token es aproximadamente
 media palabra en español; 80–94 tokens por segundo vienen a ser 40–45 palabras por segundo,
 más rápido que la mayoría de nosotros tecleamos.
 
@@ -241,7 +274,7 @@ con un interruptor apagado), +3,5 % (30 oct, runtime ROCm 10.3), +6 % releyendo 
 un 5,3 % en tareas de agente— a cambio de conocer 3,2 puntos porcentuales más de palabras: se
 publicó con su medición y su criterio de aceptación fijados de antemano (techo de pérdida: 20 %).
 Sus dos ejecuciones completas y las del arreglo del párrafo anterior están en
-[RESULTADOS.md](RESULTADOS.md) y en [benches/muestras/](benches/muestras/).*
+[RESULTADOS.md](RESULTADOS.md) y en [benches/0.1.57.x/muestras/](benches/0.1.57.x/muestras/).*
 
 Además de la velocidad, hay dos logros silenciosos que valen tanto como los números:
 
@@ -280,7 +313,7 @@ esconde nada.
 
 ---
 
-*Crónica escrita el 5 de noviembre de 2026 y ampliada el 12, el 13 y del 14 al 16 de noviembre
+*Crónica escrita el 5 de noviembre de 2026 y ampliada el 12, el 13, del 14 al 16 y el 19-20 de noviembre
 con las últimas entradas,
 a partir del cuaderno de sesiones del proyecto (append-only,
 desde el 20 de octubre). Todas las cifras son mediciones de esta caja con RX 9070 XT y el motor que

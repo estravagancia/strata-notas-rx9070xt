@@ -13,11 +13,23 @@
   (0.1.55: `88a19b89…4a77`). Desde el 12-11, en producción un motor **propio: `0.1.57.90`**
   = la etiqueta v0.2.11 más el parche CacheKV de un fork ajeno (ver la siguiente viñeta),
   compilado por nosotros con el `packaging/build_hip_linux.sh` del tag
-  (`scripts/install-01590.sh`). El 15-11 se instaló además el motor oficial **0.1.60**
+  (`scripts/0.1.57.x/install-01590.sh`). El 15-11 se instaló además el motor oficial **0.1.60**
   (v0.2.14) para su gate: NO adoptado (falló la no-regresión; ver
   [RESULTADOS.md](RESULTADOS.md)). La documentación y el servidor del clon están sincronizados
   con **v0.2.15** (con el endurecimiento local reaplicado; los motores en marcha siguen
   siendo los de la familia 0.1.57).
+- **Versiones usadas (era actual, desde el 18-11)**: clon nuevo anclado a la etiqueta
+  **v0.2.16** con un commit propio `4a7d49cb9` = v0.2.16 + CacheKV (kinoyu-ai) + IL-mmvq
+  portado a HIP + las 5 divergencias de [patches/era-actual/](patches/era-actual/). Motores
+  **`0.1.62.90`** (compilado con el ROCm del sistema, apt 7.2.1; queda como vuelta atrás) y
+  **`0.1.62.91`** (el mismo commit con el SDK ROCm 10.3 del bundle; en producción desde el
+  19-11). Recetas: `scripts/0.1.62.9x/install-016290.sh` e `install-016291.sh`. El checkout
+  anterior sigue existiendo con su historia; conviven (ver [CAMBIO-DE-ERA.md](CAMBIO-DE-ERA.md)).
+- **IL-mmvq en la ruta HIP** (los motores `0.1.57.91`, `0.1.62.90` y `0.1.62.91`): el trabajo
+  material es de **bsorensen110**, fork público [github.com/bsorensen110/Strata](https://github.com/bsorensen110/Strata)
+  (otro usuario de AMD RDNA 4). Nosotros portamos esas mejoras a nuestra base, abrimos las
+  familias de kernels a HIP y añadimos el control de paridad; el porteo lo verificamos aquí
+  bit a bit. No está enviado a Strata.
 - **Parche CacheKV** (el motor `0.1.57.90`): es trabajo de **kinoyu-ai**, fork público
   [github.com/kinoyu-ai/Strata-CacheKV-kinoyu](https://github.com/kinoyu-ai/Strata-CacheKV-kinoyu).
   Nosotros solo lo aplicamos sobre una etiqueta concreta y lo medimos; el diff que publicamos

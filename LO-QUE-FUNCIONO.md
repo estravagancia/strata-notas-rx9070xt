@@ -1,5 +1,54 @@
 # Lo que funcionó (medido en esta caja)
 
+Este fichero tiene dos bloques: **era actual** (clon v0.2.16, motores `0.1.62.9x`) arriba y
+debajo el **Histórico** de la era anterior, tal como se publicó. El contexto del corte:
+[CAMBIO-DE-ERA.md](CAMBIO-DE-ERA.md).
+
+# ERA ACTUAL — lo que funcionó sobre v0.2.16
+
+## A1. Portear CacheKV e IL-mmvq a la base v0.2.16 — la era entera depende de esto
+
+**Qué:** CacheKV (el KV en disco que sobrevive a los reinicios, del fork ajeno kinoyu-ai) y
+el IL-mmvq portado a la ruta HIP forman el commit base `4a7d49cb9` de los motores nuevos. El
+porteo IL no fue copiar tres commits: upstream ya había absorbido nuestro fix de cabeceras,
+pero las familias de kernels seguían cerradas para HIP; hubo que abrirlas y traer las celdas
+IQ3 de las tablas gfx12 del fork ajeno (bsorensen110, ver [CREDITOS.md](CREDITOS.md)).
+
+**Verificación:** los dos motores (`0.1.62.90` y `0.1.62.91`, mismo commit con dos
+compiladores) pasan el control de **paridad bit a bit IL**, y la suite de CacheKV no muestra
+regresión entre ellos. El porteo funciona en producción desde el 18-11. La ganancia del
+−92,7 % tras reinicio está medida en la era anterior; aquí no se re-midió.
+
+## A2. Extender a HIP el control de paridad IL (`p1-hip-gate-y-shim-l2`)
+
+**Qué:** en v0.2.16 esa prueba está colgada del camino CUDA y el preset HIP la apaga. Sin
+extenderla a HIP no había forma de verificar el porteo. Con el parche, la prueba corre aquí y
+es lo que da la verificación de A1.
+
+## A3. Compilar con el SDK ROCm 10.3 del bundle (`p5-rocm-sdk-103-build`)
+
+**Qué:** los paquetes nuevos no propagan el flag de compilación HIP y sin él los `.cu` se
+compilaban como CUDA (error). Con el parche, `install-016291.sh` produce `0.1.62.91`, que es
+el motor en producción desde el 19-11. Comparado con el `.90` (ROCm apt): sin caída
+sistemática; tablas en [RESULTADOS.md](RESULTADOS.md), serie del 19-11.
+
+## A4. El servidor nuevo (`terminal/serve`) con el endurecimiento local reaplicado
+
+**Qué:** v0.2.16 organiza el proyecto en `app/`, `engine/` y `terminal/`; el servidor se
+arranca de ahí con las configs de [configs/0.1.62.91/](configs/0.1.62.91/). El endurecimiento
+de imágenes y el control gfx1201 se re-portaron (`serve-local-hardening-v0.2.16.patch`) y se
+verificaron en vivo el 19-11 en el puerto de visión.
+
+## A5. El protocolo de bench en frío funciona igual en el espacio nuevo
+
+**Qué:** `run-bench.sh` portado el 19-11 (brazos `bench-arms/`, chunk forzado). Las 5 muestras
+publicadas en [benches/0.1.62.9x/muestras/](benches/0.1.62.9x/muestras/) salieron de ahí, con
+la misma disciplina de consola fría que la era anterior.
+
+---
+
+# HISTÓRICO — era 0.1.57.x (publicado hasta el 17-11)
+
 ## 1. Tabla de ajuste hipBLASLt recalibrada (C2) — la mayor ganancia limpia
 
 **Qué:** una tabla de 67 filas de algoritmos matriciales elegidos para esta tarjeta,
@@ -53,13 +102,13 @@ la producción de hoy.
 
 No es un flag, pero fue lo que desmontó la mayoría de las falsas mejoras (±3 % de ruido
 entre ejecuciones "en caliente"). Sin él, habríamos adoptado cuatro cosas que no mejoraban
-nada. Ver [scripts/run-bench.sh](scripts/run-bench.sh).
+nada. Ver [scripts/0.1.57.x/run-bench.sh](scripts/0.1.57.x/run-bench.sh).
 
 ## 5. Endurecimiento del servidor (19-10)
 
 Sin coste de rendimiento medido; tres refuerzos de robustez (cabeceras con tiempo
 límite, backlog 256, límites de imágenes/SSRF) que van en
-[patches/endurecimiento-server-v0.1.45.patch](patches/). Nunca hemos tenido un
+[patches/era-anterior/endurecimiento-server-v0.1.45.patch](patches/). Nunca hemos tenido un
 incidente desde entonces (lo cual no prueba nada, pero 12 conexiones colgadas y ráfagas
 de 40 clientes sí ocurrieron antes).
 
@@ -111,7 +160,7 @@ de trabajo por dispositivo**: no está pensada para dos prefills simultáneos en
 tarjeta. En nuestro servidor los requests se encolan, así que antes de adoptarla hicimos
 un *soak* de 3 clientes concurrentes (12 requests) y 10 minutos de carga continua
 (872 requests, 0 fallos, primer token mediano 2,0 s) — prueba informal en el servidor
-de la caja, sin muestra publicada en `benches/muestras/` y sin protocolo desglosado —.
+de la caja, sin muestra publicada en `benches/0.1.57.x/muestras/` y sin protocolo desglosado —.
 Si algún día se usa `parallel` > 1
 a nivel de motor, revisar esto primero.
 
@@ -175,18 +224,18 @@ añade un nivel de disco que **sobrevive al reinicio**: dos flags nuevas,
 `--conversation-cache-dir <dir>` y `--conversation-cache-persist`, que espejan al final de
 cada respuesta las conversaciones aparcadas y las restauran al volver a arrancar.
 **No es un parche de Strata y no está enviado arriba**: lo aplicamos nosotros sobre la
-etiqueta v0.2.11 (el diff está en [patches/](patches/CacheKV-fork-kinoyu-sobre-v0.2.11.patch)).
+etiqueta v0.2.11 (el diff está en [patches/](patches/era-anterior/CacheKV-fork-kinoyu-sobre-v0.2.11.patch)).
 
-**Cómo se monta sin recompilar a mano:** `scripts/install-01590.sh` aplica el diff sobre el
+**Cómo se monta sin recompilar a mano:** `scripts/0.1.57.x/install-01590.sh` aplica el diff sobre el
 checkout de la etiqueta y compila con el `packaging/build_hip_linux.sh` del propio tag →
 componente `0.1.57.90-linux-x86_64-hip-rx9070` (~6 min en esta caja). Un detalle que
 descoloca: el binario se declara **`0.1.57`** en `--version` y en los logs (el `.90` solo
 consta en su `BUILD.json`), así que `engine_version: 0.1.57` en el health del servidor es
 lo esperado, no un fallo. La config con las flags activas es la de
-[configs/strata-iq3_s.json](configs/strata-iq3_s.json).
+[configs/0.1.57.90/strata-iq3_s.json](configs/0.1.57.90/strata-iq3_s.json).
 
 **Cuánto — el test es con reinicio, así que no lo hace `strata_bench.py`:** hay un script
-aparte, `scripts/kv-persist-test.sh` (arranca el motor → conversación larga → apagado
+aparte, `scripts/0.1.57.x/kv-persist-test.sh` (arranca el motor → conversación larga → apagado
 normal → segundo arranque → reenvío del mismo prompt). Con el mismo prompt de 29.347
 tokens tras el reinicio (12-11, IQ3_S, contexto 94.000):
 
@@ -246,7 +295,7 @@ Qué se sigue de esto, y qué no:
   de esos dos arranques.
 
 **Cuánto cuesta en lo demás (A/B en frío, 12-11, IQ3_S, contexto 94.000, run2 auditada en
-ambos brazos, en `benches/muestras/cachekv-0.1.57-ctrl-iq3s/` y
+ambos brazos, en `benches/0.1.57.x/muestras/cachekv-0.1.57-ctrl-iq3s/` y
 `cachekv-0.1.57.90-iq3s/`):**
 
 | Métrica | Control 0.1.57 | 0.1.57.90 | Diferencia |
@@ -271,7 +320,7 @@ en escribir el espejo al cerrar cada respuesta: 79 escrituras de 120-140 ms en e
 brazo con disco. Decisión del 14-11: **se mantiene el disco**, con el coste medido y conocido
 (es una prima de seguro: lo que cubre —el prefill tras el reinicio— no aparece en un bench
 que no reinicia a mitad). Muestras:
-[benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/](benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/)
+[benches/0.1.57.x/muestras/cachekv-0.1.57.90-disk-16384-iq3s/](benches/0.1.57.x/muestras/cachekv-0.1.57.90-disk-16384-iq3s/)
 y su control sin disco. Tabla completa en [RESULTADOS.md](RESULTADOS.md).
 
 **Lo que hay que saber:**
@@ -308,7 +357,7 @@ declarada. Adoptado (el fichero se instaló el 15-11, con el head nuevo verifica
 log; la decisión de mantenerlo se registró el 16-11 — ver [data/README.md](data/README.md)).
 Control vigente de la serie:
 `2026-11-16-1502-ctrl-nuevo-vocab-chunk16384-iq3-s`. Muestra:
-[benches/muestras/vocab-es-nuevo-0.1.57.90-iq3s/](benches/muestras/vocab-es-nuevo-0.1.57.90-iq3s/).
+[benches/0.1.57.x/muestras/vocab-es-nuevo-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/vocab-es-nuevo-0.1.57.90-iq3s/).
 
 ## 12. `STRATA_HC_Q8=0`: un knob de calidad deliberado (mantenido, no una ganancia)
 

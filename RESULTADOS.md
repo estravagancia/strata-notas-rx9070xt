@@ -1,5 +1,16 @@
 # Resultados y cómo medimos
 
+Este fichero tiene dos bloques separados, porque la caja cambió de base el 18-11:
+
+- **Era actual** (motores propios `0.1.62.9x`, base v0.2.16): lo publicado desde el 19-11.
+- **Histórico — era 0.1.57.x** (base v0.2.11 para el motor, del 21-10 al 16-11): todo lo
+  publicado hasta el 17-11, tal cual se publicó. Sigue siendo válido para aquella base.
+
+Por qué hay dos bloques y qué cambió entre uno y otro:
+[CAMBIO-DE-ERA.md](CAMBIO-DE-ERA.md). **No comparar cifras entre bloques**: son motores
+distintos, otro servidor y controles propios. Dentro de cada bloque vale la regla de siempre:
+solo comparables las ejecuciones de la misma suite y el mismo chunk de prompt.
+
 ## El método (para que nuestros números se puedan comparar y repetir)
 
 - Herramienta: `tools/strata_bench.py` del propio Strata (3 pasadas por cada prueba;
@@ -7,7 +18,8 @@
   textos: un **brazo** es una ejecución de un lado de un A/B; una **era** es cada bloque
   de la serie con su config; una **ancla** es la ejecución de referencia del protocolo.
 - **Consola fría**: producción parada, OpenCode/agentes parados, servidor exclusivo de
-  la ejecución con su propio log. Script: `scripts/run-bench.sh`.
+  la ejecución con su propio log. Scripts: `scripts/0.1.57.x/run-bench.sh` (era anterior)
+  y `scripts/0.1.62.9x/run-bench.sh` con sus brazos de bench (era actual).
 - 2 ejecuciones por sesión: **run1 = calentamiento (se descarta), run2 = la válida**, tras
   auditar el `server.log` (cero prompts ajenos ≥20k tokens) y el `meta.txt` (engine,
   config con sha256, flags reales).
@@ -20,7 +32,7 @@
   `results.json` (`turn_decode_tps`), que **excluye el turno 0 de cada sesión (n=15)**
   —filas del 12-11—. Las dos dan números distintos (p. ej. en el brazo con disco del
   14-11: mediana 79,6 sobre 18 turnos frente a 82,0 sobre n=15).
-- No todas las filas tienen muestra publicada en `benches/muestras/`: `-anclaje98`,
+- No todas las filas tienen muestra publicada en `benches/0.1.57.x/muestras/`: `-anclaje98`,
   `-iqpc1`, toda la serie 27-10→29-10 y las filas del 30-10 no la tienen; esos datos
   viven en el banco privado de la caja.
 - Nada de comparar con la serie anterior al 23-10 (aquella se midió "en caliente" y no
@@ -35,6 +47,49 @@
   (ver [LO-QUE-NO-FUNCIONO.md](LO-QUE-NO-FUNCIONO.md) §"Visión (imágenes) en la GPU").
   Dentro de una misma serie el flag es idéntico en todos los brazos y los A/B valen;
   entre series es un factor más de diferencia junto a la cuantización.
+
+# ERA ACTUAL — motores 0.1.62.9x (base v0.2.16)
+
+## Serie 19-11 (IQ3_S e IQ3_XXS, contexto 94.000, sin visión): control de la era y comparación de compiladores
+
+Cinco ejecuciones con su muestra completa en
+[`benches/0.1.62.9x/muestras/`](benches/0.1.62.9x/muestras/) (motivo del corte:
+[CAMBIO-DE-ERA.md](CAMBIO-DE-ERA.md)). Los dos motores son **el mismo commit** (`4a7d49cb9`:
+v0.2.16 + CacheKV + IL-mmvq); lo único que cambia es el compilador — `0.1.62.90` con el
+ROCm del sistema (apt 7.2.1), `0.1.62.91` con el SDK ROCm 10.3 del bundle. Chat = mediana de
+los 9 requests; prefill y agente = medianas de sus pasadas.
+
+| Ejecución | Motor | chunk prompt | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
+|---|---|---|---|---|---|---|
+| `ctrl90-…-iq3-s` (19-11) | 0.1.62.90 | 16.384 | 81,3 | 2.469,9 | 3.476,4 | control de la era con IQ3_S |
+| `p5-91b-…-iq3-s` (19-11) | **0.1.62.91** | 16.384 | **84,5** | 2.468,5 | **3.522,5** | pareja del control con el motor nuevo |
+| `ctrl90-…-iq3-xxs` (19-11) | 0.1.62.90 | 16.384 | 89,2 | 2.605,7 | 3.531,2 | control con IQ3_XXS |
+| `p5-91b-…-iq3-xxs` (19-11) | **0.1.62.91** | 16.384 | **92,7** | **2.650,0** | **3.577,6** | pareja del control con el motor nuevo |
+| `p5-91-…-iq3-s` (19-11) | 0.1.62.91 | 8.192 | 82,6 | 2.469,9 | 3.245,8 | primera pasada del brazo nuevo; **no comparable** con las de arriba (chunk distinto) |
+
+Lecturas honestas:
+
+- **.91 contra .90 (misma suite y chunk)**: en chat el `.91` gana en los dos modelos
+  (+3,9 % IQ3_S, +3,9 % IQ3_XXS) con aceptación de borradores idéntica (75,9 % vs 75,7 % y
+  85,7 % vs 85,5 %), así que la diferencia viene del token por sí mismo, no de los borradores.
+  En prefill: +1,3 % en 16K en ambos, −0,1 %/+1,7 % en 4K (ruido). En agente el resultado es
+  **desigual**: mediana agrupada de decode −5,2 % con IQ3_S (84,1 → 79,7) y +10,5 % con
+  IQ3_XXS (86,7 → 95,8), movida por la aceptación de borradores del agente (61,7→56,9 y
+  67,7→71,4 %). Con una sola pareja de ejecuciones **no podemos atribuir ni ganancias ni
+  pérdidas**: lo que queda medido es que no hay una caída sistemática en todas las métricas.
+- Decisión derivada (allí, ADR-U02): quedarse con el `.91` (SDK 10.3, el entorno real de la
+  caja) y conservar el `.90` instalado como vuelta atrás. La verificación que sí fue dura es
+  la de paridad: mismo commit compilado de dos formas pasa el control de paridad bit a bit IL.
+- **Configuración de estas medidas**: pack del borrador antiguo (`dflash2.q4_0.pack`) y
+  temperature 0 del bench. La producción cambió después de pack y muestreo; hasta que no haya
+  una serie con esa configuración, estas cifras describen cómo se construyó y validó la era,
+  no lo que rinde hoy la producción.
+
+# HISTÓRICO — era 0.1.57.x (publicado hasta el 17-11)
+
+Todo lo que sigue es la documentación de la era anterior, tal como se publicó. Es válido para
+aquellos motores (línea local con base v0.1.45; los últimos sobre etiquetas oficiales hasta
+v0.2.11 + CacheKV + IL-mmvq). **No comparar estas tablas con las de arriba.**
 
 ## Serie 23-10 → 25-10 (IQ3_XXS, contexto 98.304, wheels 7.10)
 
@@ -59,7 +114,7 @@ Lecturas honestas:
   distintos"): chat −0,3 %, 4K +1,3 %, 16K +0,4 % → **neutral**, y por eso el motor
   oficial se quedó.
 - Las muestras completas de `-iqpc0`, `-iq3-0150` e `-iqgather` están en
-  [benches/muestras/](benches/muestras/) (cada una con su `results.json`).
+  [benches/0.1.57.x/muestras/](benches/0.1.57.x/muestras/) (cada una con su `results.json`).
 
 ## La ganancia de las tablas de ajuste (el 21-10, motor 0.1.47)
 
@@ -117,7 +172,7 @@ Lecturas:
 - El runtime ROCm propio (30-10) dio chat **+3,5 %** y agente **+2,5 %** con prefill casi
   igual (el +2,5 % no se deriva de la tabla de [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §6,
   donde el agente va de 80,6 a 81,1: +0,6 %; queda como cifra adicional sin desglose
-  publicado, porque estas ejecuciones no tienen muestra en `benches/muestras/`);
+  publicado, porque estas ejecuciones no tienen muestra en `benches/0.1.57.x/muestras/`);
   el 10.1 pagaba −4,4 % en 4K y el 10.3 lo recuperó (+2,2 % de 4K sobre el 10.1).
   Ver [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) y la premisa gfx1201 desmentida en
   [HARDWARE.md](HARDWARE.md).
@@ -131,7 +186,7 @@ El 03-11, A/B en el mismo día del drafter **DFlash2** (pack `q4_0` dedicado,
 con el motor **0.1.57** instalado, A/B del **anillo de preparación de prompt de gfx12**
 (256/192/96 ranuras por defecto; control: `STRATA_GFX12_RING=0`). Las ejecuciones del 05-11 usan `strata_bench.py --long`,
 que añade el prompt de 32K; las anteriores no son comparables en esa métrica. Muestras
-completas en [benches/muestras/](benches/muestras/).
+completas en [benches/0.1.57.x/muestras/](benches/0.1.57.x/muestras/).
 
 | Ejecución (etiqueta) | Motor | chat tok/s | 4K tok/s | 16K tok/s | Qué era |
 |---|---|---|---|---|---|
@@ -180,8 +235,8 @@ flags activas, tras un arranque en frío el primer request deja de pagar el pref
 conversación: 894 ms de relectura desde disco frente a ~9 s de prefill en frío de un prompt
 equivalente (medido con reinicio, no con `strata_bench.py`). Decisión del 14-11: **se mantiene
 el disco**, con el coste medido y conocido. Muestras:
-[benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/](benches/muestras/cachekv-0.1.57.90-disk-16384-iq3s/)
-y [benches/muestras/cachekv-0.1.57.90-nodisk-16384-iq3s/](benches/muestras/cachekv-0.1.57.90-nodisk-16384-iq3s/).
+[benches/0.1.57.x/muestras/cachekv-0.1.57.90-disk-16384-iq3s/](benches/0.1.57.x/muestras/cachekv-0.1.57.90-disk-16384-iq3s/)
+y [benches/0.1.57.x/muestras/cachekv-0.1.57.90-nodisk-16384-iq3s/](benches/0.1.57.x/muestras/cachekv-0.1.57.90-nodisk-16384-iq3s/).
 Controles de la serie: `2026-11-14-1128-kvdisk-chunk16384-iq3-s` y
 `2026-11-14-1138-nodisk-chunk16384-iq3-s`.
 
@@ -203,7 +258,7 @@ en las dos ejecuciones realizadas: decodificación a 32K entre −6,7 % y −9,4
 borradores aceptados subieron +1,0/+1,4 puntos y el resto quedó dentro del ruido. Vista la
 dependencia del estadístico, la decisión de no adoptar se sostiene sobre el agente y el
 16K; la señal de 32K requiere re-ejecutar 0.1.60 con dos brazos válidos antes de citarse.
-La producción sigue en 0.1.57.90. Muestra: [benches/muestras/engine-0.1.60-iq3s/](benches/muestras/engine-0.1.60-iq3s/).
+La producción sigue en 0.1.57.90. Muestra: [benches/0.1.57.x/muestras/engine-0.1.60-iq3s/](benches/0.1.57.x/muestras/engine-0.1.60-iq3s/).
 
 **`--draft-conf` 0,55 y 0,85: rechazados, se mantiene 0,7.** Pareja del 15-11 (23:28 y 23:33)
 contra el mismo control sin disco (chunk 16.384 auditado; cada brazo difiere en una sola
@@ -211,8 +266,8 @@ variable). Run2 frente al control (positivo = más lento): 0,55 → chat **+1,85
 +2,74 %, borradores 68,3 %; 0,85 → chat **+3,01 %**, agente +6,58 %, borradores 87,8 % (control
 77,4 %). Los dos brazos fallan el gate; ambos prefills quedan neutros. Inferencia (etiquetada,
 no medida): 0,7 está cerca del óptimo local. Muestras:
-[benches/muestras/dconf055-0.1.57.90-iq3s/](benches/muestras/dconf055-0.1.57.90-iq3s/) y
-[benches/muestras/dconf085-0.1.57.90-iq3s/](benches/muestras/dconf085-0.1.57.90-iq3s/). Una pareja previa de 23:13/23:20
+[benches/0.1.57.x/muestras/dconf055-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/dconf055-0.1.57.90-iq3s/) y
+[benches/0.1.57.x/muestras/dconf085-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/dconf085-0.1.57.90-iq3s/). Una pareja previa de 23:13/23:20
 quedó inválida: el motor del bench bajó el chunk a 8.192 porque la ventana de producción
 ocupaba RAM. Regla que quedó de ahí: cerrar la ventana de producción antes de cada bench.
 
@@ -227,13 +282,13 @@ borradores **+1,7 puntos** (79,1 vs 77,4), pero chat −1,7 % y agente entre **�
 −7,2 % según la ventana de turnos** (18 turnos: 78,5 frente a 83,7 = −6,2 %; agregado
 n=15 del JSON: −7,2 %). Son días
 distintos y todos los brazos del 16-11 comparten el vocab nuevo: **la atribución no es
-separable** y la duda queda declarada. Muestra: [benches/muestras/vocab-es-nuevo-0.1.57.90-iq3s/](benches/muestras/vocab-es-nuevo-0.1.57.90-iq3s/).
+separable** y la duda queda declarada. Muestra: [benches/0.1.57.x/muestras/vocab-es-nuevo-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/vocab-es-nuevo-0.1.57.90-iq3s/).
 
 **`STRATA_SPEC_ADAPT_EVERY`/`_WARM`: sin efecto, lever cerrado.** Dos parejas independientes
 del mismo día (14:37/14:48 y 15:02/15:12) dieron signos invertidos entre pasadas del propio
 bench (la pasada 1 marcaba el brazo más lento y la 2 más rápido, con magnitudes de 1-9 %):
 firma de ruido, comparable al spread interno del control. Nada que llevar a la producción.
-Muestra: [benches/muestras/specadapt-0.1.57.90-iq3s/](benches/muestras/specadapt-0.1.57.90-iq3s/).
+Muestra: [benches/0.1.57.x/muestras/specadapt-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/specadapt-0.1.57.90-iq3s/).
 
 **Regla de eras que quedó de este día:** la pareja de las 14:37/14:48 no alcanzó chunk 16.384
 (el guard de RAM del motor lo bajó a 8.192 pese a la ventana cerrada: faltaban ~2,7 GiB
@@ -246,7 +301,7 @@ Motor **0.1.57.90** (v0.2.11 + el parche CacheKV del fork kinoyu, ver
 [LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md) §10) + `STRATA_GDN_CHUNKED=1` + `STRATA_EXPDEC=0` +
 `STRATA_PREFILL_CPU_SHARE=0` + drafter **DFlash2**, **sin visión**, sobre ROCm 10.3 propio.
 Números de la ejecución auditada `run2` de la pareja del 12-11 (muestra
-`benches/muestras/cachekv-0.1.57-ctrl-iq3s/`; la otra columna es el brazo `.90`, y entre
+`benches/0.1.57.x/muestras/cachekv-0.1.57-ctrl-iq3s/`; la otra columna es el brazo `.90`, y entre
 ellas todas las diferencias están dentro del ruido — lo que aporta el parche es el
 prefill tras reinicio, no el tok/s):
 
@@ -263,7 +318,7 @@ prefill tras reinicio, no el tok/s):
 † El 32K no lo midió la pareja del 12-11 (no usó `--long`). Lo midió el 13-11 una ejecución
 de banco en frío con `--long`, con la misma config de producción y la producción intacta
 en otro puerto
-([benches/muestras/long-0.1.57.90-iq3s/](benches/muestras/long-0.1.57.90-iq3s/): media
+([benches/0.1.57.x/muestras/long-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/long-0.1.57.90-iq3s/): media
 3.163,4, rango 3.156,7-3.172,5). Ojo con la comparación: en esa ejecución quedaban ~8,8 GiB
 libres de RAM al arrancar (en la del 12-11, ~9,8) y el motor bajó solo el tamaño de chunk
 de prompt de 16.384 a 8.192; en ese mismo run el 16K dio 3.220 tok/s, un 6,7 % por debajo

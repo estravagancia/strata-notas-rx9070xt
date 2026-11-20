@@ -4,6 +4,49 @@ Todo esto se midió en esta caja con el protocolo en frío. Un negativo document
 tanto como un positivo: son ideas que cualquiera (incluido yo mismo dentro de seis
 meses) podría volver a intentar.
 
+Este fichero tiene dos bloques: **era actual** arriba y debajo el **Histórico** de la era
+anterior, tal como se publicó. Contexto del corte: [CAMBIO-DE-ERA.md](CAMBIO-DE-ERA.md).
+
+# ERA ACTUAL — descartes y obstáculos sobre v0.2.16
+
+## La receta del «espejo» (serve y docs de tags oficiales sobre el checkout viejo) → se rompió con v0.2.16
+
+Durante un mes mantuvimos el servidor y la documentación del checkout local como espejo del
+tag oficial, reaplicando encima nuestros parches. v0.2.16 reestructuró el proyecto upstream
+(`app/`, `engine/`, `terminal/`) y las rutas del espejo dejaron de existir; el ciclo se cerró
+sin hacer el porte (allí, ADR-048). Moraleja: una técnica de mantenimiento que depende de
+rutas ajenas caduca sin avisar. La solución fue un clon anclado al tag (ADR-U01), no seguir
+re-portando a mano sobre dos historias mezcladas.
+
+## Base v0.2.15 sin IL-mmvq (`0.1.61.90`) → chat −1,35 %/−3,85 %, agente −3,08 %/−1,99 %
+
+Medido el 17-11 en el espacio anterior con su pareja de control: la base nueva **sin** el IL
+portado perdía contra nuestro `0.1.57.91` teniendo además mejores borradores. De ahí la regla
+fija de esta era: ninguna versión intermedia sin IL-mmvq (allí, T33/ADR-047).
+
+## Compilar con el SDK ROCm 10.3 «a la primera» → los `.cu` se compilaban como CUDA
+
+Los paquetes nuevos no propagan el flag de compilación HIP; sin él la build mezclaba
+sintaxis y fallaba. Hubo que añadir ese flag a mano (`p5-rocm-sdk-103-build.patch`). No es
+un problema de rendimiento, pero es el obstáculo real si quieres repetir el `.91` en tu caja.
+
+## La verificación de paridad IL de upstream → apagada para HIP
+
+La prueba existe pero está colgada del camino CUDA y el preset HIP la desactiva: tal cual,
+no servía para verificar ningún porteo en AMD. Se parcheó (A1/A2 en
+[LO-QUE-FUNCIONO.md](LO-QUE-FUNCIONO.md)); sin ese parche no hay forma dura de comprobar la
+paridad bit a bit aquí.
+
+## El test de instantánea de conversación → no compilaba en ningún build
+
+Un defecto que encontramos al construir: las fuentes del test leían duplicado y el target no
+compilaba (ni en CUDA). Lo arregla `p1-dedupe-snapshot-sources.patch`. Nada que ver con el
+rendimiento, pero lo encontrarás si construyes los tests.
+
+---
+
+# HISTÓRICO — era 0.1.57.x (publicado hasta el 17-11)
+
 ## `STRATA_IQ_POPCOUNT=1` — popcount Zen 5 en los expertos IQ3 → **−1,5 % chat**
 
 El atajo: sustituir una tabla de signos por `_mm256_popcnt_epi32` (instrucción que la
@@ -37,7 +80,7 @@ paso menos caro.
 ## `--kv k8v4` (cuantización de la memoria KV) → desastre en AMD
 
 4K **−23,7 %**, 16K **−31,7 %** (medida propia; sin muestra publicada en
-`benches/muestras/`). Lo que upstream documenta para CUDA (RTX 3090) es un prompt
+`benches/0.1.57.x/muestras/`). Lo que upstream documenta para CUDA (RTX 3090) es un prompt
 «2-5 % más lento»; calificarlo de casi neutro es valoración nuestra. Que la rotación
 Hadamard de la clave V es mucho más lenta en HIP es inferencia, no medida propia. Dato a
 tener en cuenta en cualquier RDNA 3/4: lo que está medido en NVIDIA no vale aquí.
@@ -129,7 +172,7 @@ lento): chat **+0,78 %**, decodificación 16K **+1,37 %**, 32K **+9,36 %**, agen
 El gate pre-registrado de no-regresión falló por el agente y el 16K, y la decodificación a
 32K peor se repitió en las dos ejecuciones realizadas. A cambio, los borradores aceptados
 subieron +1,0/+1,4 puntos. Sin swap: la producción sigue en 0.1.57.90. Muestra:
-[benches/muestras/engine-0.1.60-iq3s/](benches/muestras/engine-0.1.60-iq3s/); tabla en
+[benches/0.1.57.x/muestras/engine-0.1.60-iq3s/](benches/0.1.57.x/muestras/engine-0.1.60-iq3s/); tabla en
 [RESULTADOS.md](RESULTADOS.md).
 
 ## `--draft-conf` 0,55 y 0,85 → los dos peores que 0,7 (15-11)
@@ -138,15 +181,15 @@ Pareja del 15-11 contra el mismo control sin disco (cada brazo cambia una sola v
 chunk 16.384 auditado). Run2 frente al control: 0,55 → chat **+1,85 %** más lento con solo
 68,3 % de borradores aceptados (control: 77,4 %); 0,85 → chat **+3,01 %** más lento pese a
 87,8 % de borradores. Inferencia (etiquetada, no medida): el 0,7 de siempre está cerca del
-óptimo local. Muestras: [benches/muestras/dconf055-0.1.57.90-iq3s/](benches/muestras/dconf055-0.1.57.90-iq3s/)
-y [dconf085-0.1.57.90-iq3s/](benches/muestras/dconf085-0.1.57.90-iq3s/).
+óptimo local. Muestras: [benches/0.1.57.x/muestras/dconf055-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/dconf055-0.1.57.90-iq3s/)
+y [dconf085-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/dconf085-0.1.57.90-iq3s/).
 
 ## `STRATA_SPEC_ADAPT_EVERY`/`_WARM` (adaptación del borrador en vivo) → sin efecto (16-11)
 
 Dos parejas independientes el mismo día (una a chunk 8.192 y otra re-lanzada a 16.384) dieron
 signos invertidos entre pasadas del propio bench, con magnitudes propias del ruido: nada que
 llevar a la producción. Lever cerrado. Muestra:
-[benches/muestras/specadapt-0.1.57.90-iq3s/](benches/muestras/specadapt-0.1.57.90-iq3s/).
+[benches/0.1.57.x/muestras/specadapt-0.1.57.90-iq3s/](benches/0.1.57.x/muestras/specadapt-0.1.57.90-iq3s/).
 
 ## Y un aviso sobre el propio proceso
 
